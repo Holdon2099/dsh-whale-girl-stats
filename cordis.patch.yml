@@ -1,0 +1,15 @@
+- insert:
+    - id: whale-girl-stats
+      name: '@local/whale-girl-stats'
+      config:
+        enabled: true
+        budget:
+          amount: 50
+          period: month
+        pricing:
+          inputPerM: 2
+          outputPerM: 3
+          cacheReadPerM: 0.2
+          cacheWritePerM: 2
+        tokensPerBowl: 8000
+        timelineDays: 14

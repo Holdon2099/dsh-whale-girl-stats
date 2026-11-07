@@ -1,0 +1,41 @@
+{
+  "name": "@local/whale-girl-stats",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real session token statistics with cost budget, timeline, per-session usage, CPU monitoring and a whale-girl who eats rice from a basin whenever tokens are spent.",
+  "author": "Holdon2099",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Holdon2099/dsh-whale-girl-stats.git"
+  },
+  "homepage": "https://github.com/Holdon2099/dsh-whale-girl-stats",
+  "bugs": {
+    "url": "https://github.com/Holdon2099/dsh-whale-girl-stats/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./assets/*": "./assets/*"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "assets/*",
+    "screenshots.json",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-locale"]
+    }
+  }
+}
