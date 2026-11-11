@@ -19,13 +19,13 @@ DSH Web GUI 的**真实会话数据统计插件**。它读取本机 DSH Session 
 - **入口与常驻状态窗**：侧边栏底部 `sidebar.footer.action` 的「干饭账本」按钮；另有一个常驻小状态窗，实时显示「已用 token / 预估成本」两项信息，可在 DSH 界面内任意拖动，位置保存在浏览器 `localStorage`，窗口缩放时自动收回可视范围；点击（不拖动）打开完整统计面板。默认停靠在左下角账号上方，不遮挡账号。
 - **真实数据**：通过 Host 的 `sessionQuery` 服务读取本机全部会话（含当前活动会话），不读假数据、不依赖浏览器缓存。
 - **总览 KPI**：总 Token（输入 / 输出 / 缓存读取分项）、真实会话数、进行中会话数、请求数。
-- **成本估算**：按可配置的每百万 Token 单价（默认 ¥2 输入 / ¥3 输出 / ¥0.2 缓存读取 / ¥2 缓存写入）计算人民币成本。
+- **成本估算**：按 DeepSeek 官方峰谷价与每条消息的模型自动计价（flash / v4-pro、cache hit/miss、输出、缓存写入按未命中输入价），也可切换为自定义单价；未知模型不虚构价格。
 - **预算**：支持「本月」或「累计」预算，显示已花、剩余、进度条；超支变红。
 - **Token 时间线**：最近 7/14/30 天逐日堆叠柱状图（输入 / 输出 / 缓存读取）+ 成本折线，hover 查看当天明细。
 - **逐会话明细**：标题、更新时间、Token 分项、成本、请求数、模型、进行中 / 已归档；可排序、可展开。
 - **CPU 监控**：实时总占用、每核占用、进程 CPU、进程内存、系统内存、系统运行时长、进程运行时长、最近采样 sparkline。
 - **干饭角色**：空闲时头顶饭盆等待投喂；检测到 Token 增长立即进入干饭——咀嚼弹跳、米粒从盆里落下、蒸汽、爱心、星星、气泡轮换；饭量随累计 Token 增长，速度随消耗速率提高，永远不显示“吃饱”。
-- **设置**：面板内直接修改预算、价格、每碗 Token 数、时间线天数；写回插件配置并实时生效。
+- **设置**：面板内直接修改预算、计价模式、每碗 Token 数、时间线天数；写回插件配置并实时生效。
 - **本地化**：简体中文 / English。
 - **自带素材**：透明立绘、头像、插件图标；无第三方运行时依赖。
 
@@ -58,8 +58,12 @@ Host 端在 `index.js` 里通过 DSH 的公开服务读取：
 Token 计数规则：
 
 - `totalTokens = inputTokens + outputTokens + cacheReadTokens (+ cacheWriteTokens)`（优先使用 provider 返回的 `totalTokens`）。
-- 成本 = `(inputTokens × 输入价 + outputTokens × 输出价 + cacheReadTokens × 缓存读取价 + cacheWriteTokens × 缓存写入价) / 1,000,000`。
-- 默认价格是**估算值**，可在面板设置里按实际价目修改。
+- `inputTokens` 是**缓存未命中输入**，`cacheReadTokens` 是缓存命中输入；成本按每条消息的 model 和发生时间（Asia/Shanghai）选择峰/谷价。
+- 官方峰谷价（¥/百万 token，2026-11-11 核对）：
+  - `deepseek-flash`：缓存命中 0.04 / 0.02，未命中 2 / 1，输出 8 / 4；
+  - `deepseek-v4-pro`：缓存命中 0.30 / 0.15，未命中 9 / 4.5，输出 27 / 13.5。
+- 高峰：北京时间周一至周五 09:00–12:00、14:00–18:00（中国法定节假日为谷时）；其余时间谷时。缓存写入没有单独费用，按未命中输入价计费。
+- 未知模型不计价（成本 0，并在 UI 提示）；可切换到自定义价目。
 
 CPU 数据来自 Node `os` 模块与 `process.cpuUsage()`：Host 每 3 秒采样一次，保留最近 60 个点；Windows 上 `os.loadavg()` 恒为 0，因此面板显示 `—`。
 
@@ -92,10 +96,11 @@ CPU 数据来自 Node `os` 模块与 `process.cpuUsage()`：Host 每 3 秒采样
       amount: 50          # 0 = 未设置预算
       period: month       # month | total
     pricing:
-      inputPerM: 2
-      outputPerM: 3
-      cacheReadPerM: 0.2
-      cacheWritePerM: 2
+      mode: official        # official = DeepSeek 官方峰谷价；custom = 自定义单价
+      inputPerM: 2          # 仅 custom 模式使用：缓存未命中输入价
+      outputPerM: 8         # 仅 custom 模式使用
+      cacheReadPerM: 0.04   # 仅 custom 模式使用
+      cacheWritePerM: 2     # 仅 custom 模式使用
     tokensPerBowl: 8000
     timelineDays: 14
 ```
@@ -140,14 +145,14 @@ whale-girl-stats/
 
 已在本机实际安装并做页面级验证（OS 截图 + UI Automation，不是只查注册表）：
 
-- Bundle `@local/whale-girl-stats@1.0.0` 安装成功，`application: applied`，插件行 `fiberPhase: active`。
+- Bundle `@local/whale-girl-stats@1.1.0` 安装成功，`application: applied`，插件行 `fiberPhase: active`。
 - Client slot：`sidebar.footer.action` 中 `whale-stats.footer` active；`shell.overlay` 中 `whale-stats.launcher`、`whale-stats.dashboard` 均 active。
-- Host 路由实测返回真实数据：8 个真实会话、页面打开时约 158M total tokens、估算成本约 ¥36.0、预算 ¥22.7 / ¥50；`sessions[]` 含 token 分项、成本、模型、运行状态。
-- **页面视觉实测**：左下角浮标与侧边栏 footer 均可见；打开面板后 Hero 角色干饭、第 19,788 碗、碗进度、开心度 99.5% / 肚量 ∞、干饭速度 ×2.2、米粒/蒸汽/气泡均正常；KPI 四卡、14 天堆叠柱状图 + 成本折线、CPU 环形/每核条/sparkline/运行时长/内存、会话明细表（进行中/已加载/已归档三态）均正常渲染。
-- 设置抽屉实测可打开，字段完整；保存调用 `POST /config` 成功，Host 重载后配置保持。
-- 状态小窗实测：显示「已用 token / 预估成本」、默认停在账号上方不遮挡账号；可拖到界面任意位置，拖动不会误触打开面板；刷新页面后位置保持；点击可正常打开完整面板。
-- 修复了实测发现的 Hero 卡片被 flex 压缩到 27px 的布局问题；`node --check index.js`、`node --check client.js` 均通过。
-- Host 聚合逻辑另用**真实 Session 日志**做离线回放断言（27 项检查全部通过）。
+- **独立计价审计**：用 Python + zstandard 直接解码全部 Session 日志，与插件 API 逐 Session 对比。修复后所有 persisted Session 的 Token 完全一致；当前活动 Session 允许毫秒级尾部差异。按官方峰谷价独立重算，插件成本与独立结果差异约 **0.1%**（旧版 v1.0.0 因默认价目过期曾高估约 3.2 倍）。
+- 预算同步修正：当前数据本月应为约 **¥29.9 / ¥50（约 60%）**，不再是错误的 184.6% 超支。
+- **页面视觉实测**：左下角浮标与侧边栏 footer 均可见；Hero、KPI、14 天堆叠柱状图 + 成本折线、CPU、会话明细、可拖动状态小窗均正常渲染。
+- 设置抽屉实测可打开；新增「计价方式：官方峰谷价 / 自定义单价」；保存调用 `POST /config` 成功，Host 重载后配置保持。
+- Host 回归测试：峰/谷、周末/节假日、flash/pro、未知模型、fork 前缀过滤、live→persisted 追平，10/10 通过。
+- `node --check index.js`、`node --check client.js` 均通过。
 - 未验证：干饭动画的逐帧动效（静态截图已确认关键帧元素与状态）、窄屏布局、浅色主题并排对比。
 
 ---
@@ -162,8 +167,10 @@ whale-girl-stats/
 
 ## 已知限制
 
-- 成本是**按 token 单价的估算值**，不是运营商账单；缓存命中、模型差异、价格调整都会影响实际费用。
-- Token 只在 `assistant/message` 完成时写入日志，因此干饭动画会在一个 step 结束时爆发，而不是逐字流式增长。
-- 历史会话首次加载会读完整日志（本机 1~5MB 压缩），之后缓存；活动会话读内存，轮询成本很低。
+- 成本是**估算值**，不是运营商账单：官方价目和节假日表需要维护；Search / Fetch 按成功请求另行计费，未计入本插件。
+- 官方价目核对日期为 2026-11-11；内置峰谷时段为北京时间，节假日表覆盖 2026 年；未知模型会显示「未计价」而不是猜测价格。
+- 模型必须在 assistant/message 的 source 中可见；如果一次 Session 内切换模型，会按每条消息各自的模型计价。
+- Token 只在 `assistant/message` 完成时写入日志，因此干饭动画会在一个 step 结束时爆发，而不是逐字流式增长；活动 Session 的尾部在两次轮询之间可能有短暂延迟。
+- 历史会话首次加载会读完整日志（本机 1~5MB 压缩），之后按 revision 缓存；活动会话读内存，轮询成本很低。
 - 插件统计的是本机 `~/.dsh/sessions` 下全部工作区的会话；不包含其他机器或其他 profile 的用量。
 - Windows 上不显示 load average（显示 `—`）。
