@@ -63,7 +63,8 @@ window.__ModuleLoader__.load({
       'kpi.sessions': '会话数',
       'kpi.sessionsSub': '其中 {n} 个进行中',
       'kpi.cost': '估算成本',
-      'kpi.costSub': '按当前价格估算',
+      'kpi.costSub': '按 DeepSeek 官方峰谷价估算',
+      'kpi.costSubCustom': '按自定义价目估算',
       'kpi.budget': '预算',
       'kpi.budgetRemaining': '¥{remaining} 剩余 / ¥{amount}',
       'kpi.budgetNone': '未设置预算',
@@ -119,17 +120,22 @@ window.__ModuleLoader__.load({
       'sessions.detail.model': '模型',
       'sessions.detail.created': '创建时间',
       'settings.title': '统计设置',
-      'settings.note': '价格为估算值，按 DeepSeek 公开价目可自行调整。',
+      'settings.note': '成本为估算值，按每条消息的模型与发生时间自动选择峰谷价；不含 Search/Fetch 费用。',
       'settings.budget': '预算',
       'settings.budgetAmount': '预算金额（0 = 未设置，元）',
       'settings.budgetPeriod': '预算周期',
       'settings.period.month': '每月',
       'settings.period.total': '累计',
-      'settings.pricing': '价格（元 / 百万 token）',
-      'settings.inputPerM': '输入价格',
-      'settings.outputPerM': '输出价格',
-      'settings.cacheReadPerM': '缓存读取价格',
-      'settings.cacheWritePerM': '缓存写入价格',
+      'settings.pricing': '价格（自定义模式）',
+      'settings.priceMode': '计价方式',
+      'settings.priceModeHint': '默认使用 DeepSeek 官方峰谷价；自定义模式用于非 DeepSeek 或未收录模型。',
+      'settings.mode.official': 'DeepSeek 官方峰谷价',
+      'settings.mode.custom': '自定义单价',
+      'settings.officialNote': '官方价目（¥/百万 token，峰/谷）：deepseek-flash 缓存命中 0.04/0.02、未命中 2/1、输出 8/4；deepseek-v4-pro 0.30/0.15、9/4.5、27/13.5。峰时为北京时间周一至周五 09:00–12:00、14:00–18:00（中国法定节假日为谷时），缓存写入按未命中输入价计费。',
+      'settings.inputPerM': '未命中输入价',
+      'settings.outputPerM': '输出价',
+      'settings.cacheReadPerM': '缓存命中价',
+      'settings.cacheWritePerM': '缓存写入价',
       'settings.character': '干饭参数',
       'settings.tokensPerBowl': '每碗 token 数',
       'settings.timelineDays': '时间线天数',
@@ -150,6 +156,8 @@ window.__ModuleLoader__.load({
       'state.offlineHint': '已保留上次数据，连接恢复后自动更新。',
       'state.unavailable': '无法读取会话数据。',
       'state.unavailableHint': '统计接口返回 available=false，面板继续显示可用部分。',
+      'state.unpriced': '存在未计价模型',
+      'state.unpricedHint': '{n} 个请求的模型不在官方价目表中，成本按 0 计；可在设置中切换到自定义价目。',
       'common.close': '关闭',
       'common.na': '—',
     };
@@ -201,7 +209,8 @@ window.__ModuleLoader__.load({
       'kpi.sessions': 'Sessions',
       'kpi.sessionsSub': '{n} in progress',
       'kpi.cost': 'Estimated cost',
-      'kpi.costSub': 'estimated at current prices',
+      'kpi.costSub': 'estimated at official DeepSeek peak/off-peak rates',
+      'kpi.costSubCustom': 'estimated with custom rates',
       'kpi.budget': 'Budget',
       'kpi.budgetRemaining': '¥{remaining} left / ¥{amount}',
       'kpi.budgetNone': 'No budget set',
@@ -257,17 +266,22 @@ window.__ModuleLoader__.load({
       'sessions.detail.model': 'model',
       'sessions.detail.created': 'created',
       'settings.title': 'Statistics settings',
-      'settings.note': 'Prices are estimates; adjust them against DeepSeek’s published pricing.',
+      'settings.note': 'Costs are estimates: each message uses the official rate for its own model and timestamp (peak/off-peak); Search/Fetch fees are excluded.',
       'settings.budget': 'Budget',
       'settings.budgetAmount': 'Budget amount (0 = no budget, CNY)',
       'settings.budgetPeriod': 'Budget period',
       'settings.period.month': 'per month',
       'settings.period.total': 'cumulative',
-      'settings.pricing': 'Prices (CNY / million tokens)',
-      'settings.inputPerM': 'input price',
-      'settings.outputPerM': 'output price',
-      'settings.cacheReadPerM': 'cache read price',
-      'settings.cacheWritePerM': 'cache write price',
+      'settings.pricing': 'Prices (custom mode)',
+      'settings.priceMode': 'Pricing mode',
+      'settings.priceModeHint': 'Official DeepSeek peak/off-peak rates are used by default; custom mode covers non-DeepSeek or unknown models.',
+      'settings.mode.official': 'Official DeepSeek peak/off-peak',
+      'settings.mode.custom': 'Custom per-token rates',
+      'settings.officialNote': 'Official rates (CNY / 1M tokens, peak/off-peak): deepseek-flash cache hit 0.04/0.02, cache miss 2/1, output 8/4; deepseek-v4-pro 0.30/0.15, 9/4.5, 27/13.5. Peak is Beijing time Mon-Fri 09:00-12:00 and 14:00-18:00; Chinese public holidays are off-peak. Cache writes are billed at the cache-miss input rate.',
+      'settings.inputPerM': 'cache-miss input',
+      'settings.outputPerM': 'output',
+      'settings.cacheReadPerM': 'cache hit',
+      'settings.cacheWritePerM': 'cache write',
       'settings.character': 'Feeding parameters',
       'settings.tokensPerBowl': 'tokens per bowl',
       'settings.timelineDays': 'timeline days',
@@ -288,6 +302,8 @@ window.__ModuleLoader__.load({
       'state.offlineHint': 'The last snapshot is kept; it refreshes when the connection returns.',
       'state.unavailable': 'Session data is unavailable.',
       'state.unavailableHint': 'The statistics endpoint returned available=false; the rest of the panel still renders.',
+      'state.unpriced': 'Some models are unpriced',
+      'state.unpricedHint': '{n} requests use a model outside the official price catalog; their cost is counted as 0. Switch to custom rates in Settings to price them.',
       'common.close': 'Close',
       'common.na': '—',
     };
@@ -444,9 +460,10 @@ window.__ModuleLoader__.load({
       return {
         budgetAmount: String(num(budget.amount, 0)),
         budgetPeriod: budget.period === 'total' ? 'total' : 'month',
+        pricingMode: pricing.mode === 'custom' ? 'custom' : 'official',
         inputPerM: String(num(pricing.inputPerM, 2)),
-        outputPerM: String(num(pricing.outputPerM, 3)),
-        cacheReadPerM: String(num(pricing.cacheReadPerM, 0.2)),
+        outputPerM: String(num(pricing.outputPerM, 8)),
+        cacheReadPerM: String(num(pricing.cacheReadPerM, 0.04)),
         cacheWritePerM: String(num(pricing.cacheWritePerM, 2)),
         tokensPerBowl: String(num(cfg.tokensPerBowl, 8000)),
         timelineDays: String(num(cfg.timelineDays, 14)),
@@ -462,9 +479,10 @@ window.__ModuleLoader__.load({
           period: source.budgetPeriod === 'total' ? 'total' : 'month',
         },
         pricing: {
+          mode: source.pricingMode === 'custom' ? 'custom' : 'official',
           inputPerM: Math.max(0, num(source.inputPerM, 2)),
-          outputPerM: Math.max(0, num(source.outputPerM, 3)),
-          cacheReadPerM: Math.max(0, num(source.cacheReadPerM, 0.2)),
+          outputPerM: Math.max(0, num(source.outputPerM, 8)),
+          cacheReadPerM: Math.max(0, num(source.cacheReadPerM, 0.04)),
           cacheWritePerM: Math.max(0, num(source.cacheWritePerM, 2)),
         },
         tokensPerBowl: Math.max(1, Math.round(num(source.tokensPerBowl, 8000))),
@@ -2419,7 +2437,7 @@ window.__ModuleLoader__.load({
           value: formatMoney(cost),
           money: true,
           sub:
-            t('kpi.costSub') +
+            t(pricingMode === 'custom' ? 'kpi.costSubCustom' : 'kpi.costSub') +
             ' · ' +
             t('kpi.todayCost', null, { cost: formatAmount(today.cost) }),
         }),
@@ -3241,67 +3259,83 @@ window.__ModuleLoader__.load({
                       ),
                     ),
                   ),
-                  h(
-                    'div',
-                    { className: 'wgs-form-group' },
-                    h('div', { className: 'wgs-form-group-title' }, t('settings.pricing')),
-                    h(
-                      'div',
-                      { className: 'wgs-grid2' },
-                      h(
-                        Field,
-                        { label: t('settings.inputPerM') },
-                        h('input', {
-                          className: 'wgs-input',
-                          type: 'number',
-                          min: 0,
-                          step: 0.01,
-                          value: form.inputPerM,
-                          disabled: !editable,
-                          onChange: (event) => update('inputPerM', event.target.value),
-                        }),
-                      ),
-                      h(
-                        Field,
-                        { label: t('settings.outputPerM') },
-                        h('input', {
-                          className: 'wgs-input',
-                          type: 'number',
-                          min: 0,
-                          step: 0.01,
-                          value: form.outputPerM,
-                          disabled: !editable,
-                          onChange: (event) => update('outputPerM', event.target.value),
-                        }),
-                      ),
-                      h(
-                        Field,
-                        { label: t('settings.cacheReadPerM') },
-                        h('input', {
-                          className: 'wgs-input',
-                          type: 'number',
-                          min: 0,
-                          step: 0.01,
-                          value: form.cacheReadPerM,
-                          disabled: !editable,
-                          onChange: (event) => update('cacheReadPerM', event.target.value),
-                        }),
-                      ),
-                      h(
-                        Field,
-                        { label: t('settings.cacheWritePerM') },
-                        h('input', {
-                          className: 'wgs-input',
-                          type: 'number',
-                          min: 0,
-                          step: 0.01,
-                          value: form.cacheWritePerM,
-                          disabled: !editable,
-                          onChange: (event) => update('cacheWritePerM', event.target.value),
-                        }),
-                      ),
-                    ),
-                  ),
+        h(
+          'div',
+          { className: 'wgs-form-group' },
+          h('div', { className: 'wgs-form-group-title' }, t('settings.pricing')),
+          h(
+            Field,
+            { label: t('settings.priceMode'), hint: t('settings.priceModeHint') },
+            h(
+              'select',
+              {
+                className: 'wgs-select',
+                value: form.pricingMode,
+                disabled: !editable,
+                onChange: (event) => update('pricingMode', event.target.value),
+              },
+              h('option', { value: 'official' }, t('settings.mode.official')),
+              h('option', { value: 'custom' }, t('settings.mode.custom')),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'wgs-grid2' },
+            h(
+              Field,
+              { label: t('settings.inputPerM') },
+              h('input', {
+                className: 'wgs-input',
+                type: 'number',
+                min: 0,
+                step: 0.01,
+                value: form.inputPerM,
+                disabled: !editable || form.pricingMode !== 'custom',
+                onChange: (event) => update('inputPerM', event.target.value),
+              }),
+            ),
+            h(
+              Field,
+              { label: t('settings.outputPerM') },
+              h('input', {
+                className: 'wgs-input',
+                type: 'number',
+                min: 0,
+                step: 0.01,
+                value: form.outputPerM,
+                disabled: !editable || form.pricingMode !== 'custom',
+                onChange: (event) => update('outputPerM', event.target.value),
+              }),
+            ),
+            h(
+              Field,
+              { label: t('settings.cacheReadPerM') },
+              h('input', {
+                className: 'wgs-input',
+                type: 'number',
+                min: 0,
+                step: 0.01,
+                value: form.cacheReadPerM,
+                disabled: !editable || form.pricingMode !== 'custom',
+                onChange: (event) => update('cacheReadPerM', event.target.value),
+              }),
+            ),
+            h(
+              Field,
+              { label: t('settings.cacheWritePerM') },
+              h('input', {
+                className: 'wgs-input',
+                type: 'number',
+                min: 0,
+                step: 0.01,
+                value: form.cacheWritePerM,
+                disabled: !editable || form.pricingMode !== 'custom',
+                onChange: (event) => update('cacheWritePerM', event.target.value),
+              }),
+            ),
+          ),
+          h('div', { className: 'wgs-note' }, t('settings.officialNote')),
+        ),
                   h(
                     'div',
                     { className: 'wgs-form-group' },
@@ -3871,6 +3905,10 @@ window.__ModuleLoader__.load({
       if (!open) return null;
 
       const data = overview;
+      const pricingMode =
+        data && data.config && data.config.pricing && data.config.pricing.mode === 'custom'
+          ? 'custom'
+          : 'official';
       const character = data && data.character ? data.character : {};
       const sessions = data && Array.isArray(data.sessions) ? data.sessions : [];
       const timeline = data && data.timeline ? data.timeline : null;
@@ -3907,6 +3945,20 @@ window.__ModuleLoader__.load({
             { className: 'wgs-banner', key: 'banner-unavailable' },
             h('div', { className: 'wgs-banner-title' }, t('state.unavailable')),
             h('div', { className: 'wgs-banner-sub' }, t('state.unavailableHint')),
+          ),
+        );
+      }
+      if (data && data.totals && num(data.totals.unpricedRequests, 0) > 0) {
+        banners.push(
+          h(
+            'div',
+            { className: 'wgs-banner', 'data-kind': 'info', key: 'banner-unpriced' },
+            h('div', { className: 'wgs-banner-title' }, t('state.unpriced')),
+            h(
+              'div',
+              { className: 'wgs-banner-sub' },
+              t('state.unpricedHint', null, { n: formatInt(num(data.totals.unpricedRequests, 0)) }),
+            ),
           ),
         );
       }
