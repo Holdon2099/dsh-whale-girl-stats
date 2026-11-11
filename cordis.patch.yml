@@ -7,9 +7,10 @@
           amount: 50
           period: month
         pricing:
+          mode: official
           inputPerM: 2
-          outputPerM: 3
-          cacheReadPerM: 0.2
+          outputPerM: 8
+          cacheReadPerM: 0.04
           cacheWritePerM: 2
         tokensPerBowl: 8000
         timelineDays: 14
