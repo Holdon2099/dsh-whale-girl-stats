@@ -2,15 +2,52 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const API = '/api/whale-girl-stats';
 const CURRENCY = 'CNY';
 const RATE_WINDOW_MS = 60 * 1000;
+const PRICE_VERSION = '2026-11-11';
+
+// Official DeepSeek CNY prices, per 1M tokens. Peak/off-peak is selected per
+// assistant message from its own timestamp (Asia/Shanghai), never per session.
+const DEEPSEEK_PRICING = {
+  'deepseek-flash': {
+    peak: { inputPerM: 2, outputPerM: 8, cacheReadPerM: 0.04 },
+    offPeak: { inputPerM: 1, outputPerM: 4, cacheReadPerM: 0.02 },
+  },
+  'deepseek-v4-pro': {
+    peak: { inputPerM: 9, outputPerM: 27, cacheReadPerM: 0.3 },
+    offPeak: { inputPerM: 4.5, outputPerM: 13.5, cacheReadPerM: 0.15 },
+  },
+};
+const DEEPSEEK_MODEL_ALIASES = {
+  'deepseek-v4-flash': 'deepseek-flash',
+  'deepseek-v4-flash-vision-exp': 'deepseek-flash',
+};
+// Chinese statutory holidays in 2026 (State Council notice 国办发明电〔2025〕7号).
+// DeepSeek treats these as off-peak even when they fall on a weekday.
+const CHINA_HOLIDAYS_2026 = new Set([
+  '2026-01-01', '2026-01-02', '2026-01-03',
+  '2026-02-15', '2026-02-16', '2026-02-17', '2026-02-18', '2026-02-19',
+  '2026-02-20', '2026-02-21', '2026-02-22', '2026-02-23',
+  '2026-04-04', '2026-04-05', '2026-04-06',
+  '2026-05-01', '2026-05-02', '2026-05-03', '2026-05-04', '2026-05-05',
+  '2026-06-19', '2026-06-20', '2026-06-21',
+  '2026-09-25', '2026-09-26', '2026-09-27',
+  '2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05',
+  '2026-10-06', '2026-10-07',
+]);
 
 const DEFAULT_CONFIG = {
   enabled: true,
   budget: { amount: 50, period: 'month' },
-  pricing: { inputPerM: 2, outputPerM: 3, cacheReadPerM: 0.2, cacheWritePerM: 2 },
+  pricing: {
+    mode: 'official',
+    inputPerM: 2,
+    outputPerM: 8,
+    cacheReadPerM: 0.04,
+    cacheWritePerM: 2,
+  },
   tokensPerBowl: 8000,
   timelineDays: 14,
 };
@@ -33,6 +70,28 @@ function integer(value, fallback, min, max) {
   return Math.round(number(value, fallback, min, max));
 }
 
+function isPeakTime(ms) {
+  const date = new Date((Number(ms) || Date.now()) + 8 * 60 * 60 * 1000);
+  const weekday = date.getUTCDay();
+  if (weekday === 0 || weekday === 6) return false;
+  const dateKey = `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+  if (CHINA_HOLIDAYS_2026.has(dateKey)) return false;
+  const hour = date.getUTCHours() + date.getUTCMinutes() / 60;
+  return (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18);
+}
+
+function normalizeModel(model) {
+  const value = String(model || '').trim().toLowerCase();
+  return DEEPSEEK_MODEL_ALIASES[value] || value;
+}
+
+function officialRates(model, time) {
+  const table = DEEPSEEK_PRICING[normalizeModel(model)];
+  if (!table) return null;
+  const peak = isPeakTime(time);
+  return { ...(peak ? table.peak : table.offPeak), peak };
+}
+
 function mergeConfig(raw) {
   const input = isRecord(raw) ? raw : {};
   const budget = isRecord(input.budget) ? input.budget : {};
@@ -44,6 +103,7 @@ function mergeConfig(raw) {
       period: budget.period === 'total' ? 'total' : 'month',
     },
     pricing: {
+      mode: pricing.mode === 'custom' ? 'custom' : 'official',
       inputPerM: number(pricing.inputPerM, DEFAULT_CONFIG.pricing.inputPerM, 0, 1e6),
       outputPerM: number(pricing.outputPerM, DEFAULT_CONFIG.pricing.outputPerM, 0, 1e6),
       cacheReadPerM: number(pricing.cacheReadPerM, DEFAULT_CONFIG.pricing.cacheReadPerM, 0, 1e6),
@@ -70,6 +130,10 @@ function cleanConfigPatch(raw, current) {
     }
   }
   if (isRecord(input.pricing)) {
+    if (input.pricing.mode === 'official' || input.pricing.mode === 'custom') {
+      next.pricing.mode = input.pricing.mode;
+      changed.pricing = true;
+    }
     for (const key of ['inputPerM', 'outputPerM', 'cacheReadPerM', 'cacheWritePerM']) {
       if (input.pricing[key] !== undefined) {
         next.pricing[key] = number(input.pricing[key], next.pricing[key], 0, 1e6);
@@ -180,18 +244,30 @@ function shotTitle(text, fallback) {
   return clean.length > 44 ? `${clean.slice(0, 44)}…` : clean;
 }
 
-function costOf(usage, pricing) {
-  return (
-    (usage.inputTokens * pricing.inputPerM +
-      usage.outputTokens * pricing.outputPerM +
-      usage.cacheReadTokens * pricing.cacheReadPerM +
-      usage.cacheWriteTokens * pricing.cacheWritePerM) /
-    1_000_000
-  );
+function costOfPoint(point, pricing) {
+  if (pricing.mode === 'custom') {
+    const cost = (
+      point.inputTokens * pricing.inputPerM +
+      point.outputTokens * pricing.outputPerM +
+      point.cacheReadTokens * pricing.cacheReadPerM +
+      point.cacheWriteTokens * pricing.cacheWritePerM
+    ) / 1_000_000;
+    return { cost, priced: true, peak: null };
+  }
+  const rates = officialRates(point.model, point.time);
+  if (!rates) return { cost: 0, priced: false, peak: null };
+  // DeepSeek has no separate cache-write fee; a cache write is a cache-miss input.
+  const cost = (
+    point.inputTokens * rates.inputPerM +
+    point.outputTokens * rates.outputPerM +
+    point.cacheReadTokens * rates.cacheReadPerM +
+    point.cacheWriteTokens * rates.inputPerM
+  ) / 1_000_000;
+  return { cost, priced: true, peak: rates.peak };
 }
 
 function emptyUsage() {
-  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, cost: 0, requests: 0 };
+  return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, cost: 0, requests: 0, unpricedRequests: 0 };
 }
 
 function addUsage(target, usage) {
@@ -202,6 +278,7 @@ function addUsage(target, usage) {
   target.totalTokens += usage.totalTokens;
   target.cost += usage.cost;
   target.requests += usage.requests;
+  target.unpricedRequests += usage.unpricedRequests || 0;
 }
 
 function parseSession(header, events, live, inheritedFloor = 0) {
@@ -244,8 +321,11 @@ function parseSession(header, events, live, inheritedFloor = 0) {
       case 'assistant/message': {
         const usage = event.data && event.data.usage;
         if (!usage) break;
+        const source = event.data && event.data.message && event.data.message.source;
+        const modelName = source && typeof source.model === 'string' ? source.model : '';
         const point = {
           time,
+          model: modelName,
           inputTokens: Math.max(0, Number(usage.inputTokens) || 0),
           outputTokens: Math.max(0, Number(usage.outputTokens) || 0),
           cacheReadTokens: Math.max(0, Number(usage.cacheReadTokens) || 0),
@@ -256,11 +336,9 @@ function parseSession(header, events, live, inheritedFloor = 0) {
             ? Number(usage.totalTokens)
             : point.inputTokens + point.outputTokens + point.cacheReadTokens + point.cacheWriteTokens;
         point.cost = 0;
+        point.priced = true;
         points.push(point);
-        const source = event.data && event.data.message && event.data.message.source;
-        if (source && typeof source.model === 'string' && source.model) {
-          models.set(source.model, (models.get(source.model) || 0) + 1);
-        }
+        if (modelName) models.set(modelName, (models.get(modelName) || 0) + 1);
         break;
       }
       default:
@@ -294,9 +372,12 @@ function usageFromPoints(points, pricing) {
     totals.cacheWriteTokens += point.cacheWriteTokens;
     totals.totalTokens += point.totalTokens;
     totals.requests += 1;
-    const cost = costOf(point, pricing);
-    point.cost = cost;
-    totals.cost += cost;
+    const priced = costOfPoint(point, pricing);
+    point.cost = priced.cost;
+    point.priced = priced.priced;
+    point.peak = priced.peak;
+    if (!priced.priced) totals.unpricedRequests += 1;
+    totals.cost += priced.cost;
   }
   return totals;
 }
@@ -429,11 +510,31 @@ export function apply(ctx, rawConfig) {
       for (const session of store.list()) liveSessions.set(String(session.id), session);
     }
 
+    // Persisted logs are append-only, but a Session can be read once while it
+    // is live and then keep growing after it stops being live. Cache entries
+    // keyed by the persistence revision keep those late events from being lost.
+    const persistence = ctx.get('sessionPersistence');
+    const revisions = new Map();
+    if (persistence && typeof persistence.list === 'function') {
+      try {
+        const snapshots = await persistence.list();
+        for (const snapshot of snapshots || []) {
+          const header = snapshot && snapshot.header;
+          if (header && header.id) revisions.set(String(header.id), String(snapshot.revision ?? ''));
+        }
+      } catch (error) {
+        warn('读取会话 revision 失败', error && error.message);
+      }
+    }
+
     const collected = [];
+    const recordIds = new Set();
     for (const record of records || []) {
       const header = record && record.header ? record.header : record;
       if (!header || !header.id) continue;
       const id = String(header.id);
+      recordIds.add(id);
+      const revision = revisions.get(id) || '';
       const live = liveSessions.get(id);
       let entry;
       if (live) {
@@ -443,9 +544,18 @@ export function apply(ctx, rawConfig) {
           true,
           Number(live.inheritedEventCount) || 0,
         );
+        entry.revision = revision;
         state.sessions.set(id, entry);
       } else {
         entry = state.sessions.get(id);
+        const stale = Boolean(entry) && (
+          entry.live ||
+          (revision !== '' && (!entry.revision || entry.revision !== revision))
+        );
+        if (stale) {
+          state.sessions.delete(id);
+          entry = undefined;
+        }
         if (!entry) {
           try {
             const snapshot = await query.readSession(id);
@@ -457,6 +567,7 @@ export function apply(ctx, rawConfig) {
                 Number(snapshot.inheritedEventCount) || 0,
               );
               entry.persisted = true;
+              entry.revision = revision;
               state.sessions.set(id, entry);
             }
           } catch (error) {
@@ -467,6 +578,9 @@ export function apply(ctx, rawConfig) {
         }
       }
       if (entry) collected.push(entry);
+    }
+    for (const id of state.sessions.keys()) {
+      if (!recordIds.has(id)) state.sessions.delete(id);
     }
     return { available: true, sessions: collected };
   }
@@ -503,6 +617,7 @@ export function apply(ctx, rawConfig) {
           totalTokens: totals.totalTokens,
           cost: totals.cost,
           requests: totals.requests,
+          unpricedRequests: totals.unpricedRequests,
           turns: entry.turns,
           model: entry.model,
           live: entry.live,
@@ -532,6 +647,7 @@ export function apply(ctx, rawConfig) {
         today.totalTokens += point.totalTokens;
         today.requests += 1;
         today.cost += point.cost;
+        if (!point.priced) today.unpricedRequests += 1;
       }
       if (monthKey(point.time) === currentMonth) monthSpend.cost += point.cost;
       if (point.time >= now - RATE_WINDOW_MS) recentTokens.sum += point.totalTokens;
@@ -599,6 +715,19 @@ export function apply(ctx, rawConfig) {
     };
 
     const cpu = state.cpuSample || sampleCpu();
+    const pricingInfo = {
+      mode: pricing.mode,
+      version: PRICE_VERSION,
+      currency: CURRENCY,
+      peakNow: isPeakTime(now),
+      peakSchedule: 'Asia/Shanghai · Mon-Fri 09:00-12:00 / 14:00-18:00; off-peak weekends and Chinese public holidays',
+      models: Object.fromEntries(
+        Object.entries(DEEPSEEK_PRICING).map(([model, value]) => [model, {
+          peak: value.peak,
+          offPeak: value.offPeak,
+        }]),
+      ),
+    };
 
     return {
       ok: true,
@@ -607,6 +736,7 @@ export function apply(ctx, rawConfig) {
       available: collection.available,
       currency: CURRENCY,
       config: state.config,
+      pricingInfo,
       totals: {
         inputTokens: aggregate.inputTokens,
         outputTokens: aggregate.outputTokens,
@@ -614,6 +744,7 @@ export function apply(ctx, rawConfig) {
         cacheWriteTokens: aggregate.cacheWriteTokens,
         totalTokens: aggregate.totalTokens,
         cost: Math.round(aggregate.cost * 10000) / 10000,
+        unpricedRequests: aggregate.unpricedRequests,
         sessions: sessions.length,
         liveSessions,
         requests: aggregate.requests,
@@ -628,6 +759,7 @@ export function apply(ctx, rawConfig) {
         totalTokens: today.totalTokens,
         cost: Math.round(today.cost * 10000) / 10000,
         requests: today.requests,
+        unpricedRequests: today.unpricedRequests,
       },
       budget,
       rate: {
