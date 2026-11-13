@@ -158,6 +158,40 @@ window.__ModuleLoader__.load({
       'state.unavailableHint': '统计接口返回 available=false，面板继续显示可用部分。',
       'state.unpriced': '存在未计价模型',
       'state.unpricedHint': '{n} 个请求的模型不在官方价目表中，成本按 0 计；可在设置中切换到自定义价目。',
+      'header.export': '导出 CSV',
+      'header.exportHint': '下载当前快照的逐会话 CSV',
+      'alerts.title': '预算告警',
+      'alerts.threshold': '阈值 {pct}%',
+      'alerts.scope.month': '月预算',
+      'alerts.scope.total': '累计预算',
+      'alerts.scope.daily': '日预算',
+      'alerts.line': '{scope} 已用 {percent}%：已花 ¥{spent} / 预算 ¥{amount}（{period}）',
+      'alerts.more': '另有 {n} 条阈值告警已触发',
+      'breakdown.title': '成本归因',
+      'breakdown.sub': '按成本占比看清 token 花在哪里',
+      'breakdown.tab.model': '模型',
+      'breakdown.tab.workspace': '工作区',
+      'breakdown.tab.agentType': '主体',
+      'breakdown.agent.main': '主会话',
+      'breakdown.agent.subagent': '子代理',
+      'breakdown.empty': '暂无成本归因数据。',
+      'breakdown.tokens': '{tokens} token',
+      'breakdown.requests': '{n} 请求',
+      'breakdown.sessions': '{n} 会话',
+      'breakdown.more': '另有 {n} 项未显示',
+      'breakdown.unpriced': '当前没有可计价的成本，条形暂时按 token 占比展示。',
+      'sessions.subagentBadge': '子代理',
+      'sessions.detail.parent': '父会话',
+      'settings.scope': '统计范围',
+      'settings.includeSubagents': '统计中包含子代理',
+      'settings.includeSubagentsHint': '关闭后，总量、预算、成本归因与会话明细都会排除子代理。',
+      'settings.dailyAmount': '日预算金额（0 = 不启用，元）',
+      'settings.alertThresholds': '告警阈值（百分比，逗号分隔）',
+      'settings.alertThresholdsHint': '例如 80,100；Host 在首次越过阈值时触发，可配合 Webhook。',
+      'settings.webhookUrl': 'Webhook URL（可选）',
+      'settings.webhookHint': '阈值首次触发时 Host 会向该地址 POST 一条 JSON。',
+      'settings.days90': '90 天',
+      'kpi.budgetDaily': '日预算 ¥{spent} / ¥{amount}（{pct}%）',
       'common.close': '关闭',
       'common.na': '—',
     };
@@ -304,6 +338,40 @@ window.__ModuleLoader__.load({
       'state.unavailableHint': 'The statistics endpoint returned available=false; the rest of the panel still renders.',
       'state.unpriced': 'Some models are unpriced',
       'state.unpricedHint': '{n} requests use a model outside the official price catalog; their cost is counted as 0. Switch to custom rates in Settings to price them.',
+      'header.export': 'Export CSV',
+      'header.exportHint': 'Download a per-session CSV of the current snapshot',
+      'alerts.title': 'Budget alert',
+      'alerts.threshold': 'threshold {pct}%',
+      'alerts.scope.month': 'Monthly budget',
+      'alerts.scope.total': 'Cumulative budget',
+      'alerts.scope.daily': 'Daily budget',
+      'alerts.line': '{scope} at {percent}%: ¥{spent} spent / ¥{amount} budget ({period})',
+      'alerts.more': '{n} more threshold alerts fired',
+      'breakdown.title': 'Cost attribution',
+      'breakdown.sub': 'Where the tokens went, by cost share',
+      'breakdown.tab.model': 'Model',
+      'breakdown.tab.workspace': 'Workspace',
+      'breakdown.tab.agentType': 'Agent type',
+      'breakdown.agent.main': 'Main',
+      'breakdown.agent.subagent': 'Subagent',
+      'breakdown.empty': 'No cost attribution data yet.',
+      'breakdown.tokens': '{tokens} tokens',
+      'breakdown.requests': '{n} requests',
+      'breakdown.sessions': '{n} sessions',
+      'breakdown.more': '{n} more items hidden',
+      'breakdown.unpriced': 'No priced cost yet; bars show token share instead.',
+      'sessions.subagentBadge': 'Subagent',
+      'sessions.detail.parent': 'parent session',
+      'settings.scope': 'Scope',
+      'settings.includeSubagents': 'Include subagents in statistics',
+      'settings.includeSubagentsHint': 'When off, totals, budget, cost attribution and session rows all exclude subagents.',
+      'settings.dailyAmount': 'Daily budget amount (0 = off, CNY)',
+      'settings.alertThresholds': 'Alert thresholds (percent, comma separated)',
+      'settings.alertThresholdsHint': 'e.g. 80,100; the host fires once per threshold crossing (Webhook optional).',
+      'settings.webhookUrl': 'Webhook URL (optional)',
+      'settings.webhookHint': 'The host POSTs JSON here when a threshold first triggers.',
+      'settings.days90': '90 days',
+      'kpi.budgetDaily': 'daily ¥{spent} / ¥{amount} ({pct}%)',
       'common.close': 'Close',
       'common.na': '—',
     };
@@ -378,6 +446,36 @@ window.__ModuleLoader__.load({
       if (amount >= 1000) return formatInt(amount);
       if (amount >= 10) return amount.toFixed(1).replace(/\.0$/, '');
       return amount.toFixed(2).replace(/\.?0+$/, '') || '0';
+    }
+
+    function formatPercent(value) {
+      const percent = num(value, 0);
+      const rounded = percent >= 100 ? Math.round(percent) : Math.round(percent * 10) / 10;
+      return String(rounded).replace(/\.0$/, '');
+    }
+
+    /* 把 "80,100" / "80，100" / 数组 统一成升序去重的百分比列表 */
+    function parseThresholds(value) {
+      const source = Array.isArray(value)
+        ? value
+        : String(value === undefined || value === null ? '' : value).split(/[,，;；\s]+/);
+      const seen = [];
+      for (const item of source) {
+        const percent = num(item, NaN);
+        if (!isFinite(percent) || percent <= 0) continue;
+        const rounded = Math.round(clamp(percent, 1, 1000));
+        if (seen.indexOf(rounded) < 0) seen.push(rounded);
+      }
+      seen.sort(function (left, right) {
+        return left - right;
+      });
+      return seen.slice(0, 10);
+    }
+
+    function scopeLabel(t, scope) {
+      const key =
+        scope === 'daily' ? 'alerts.scope.daily' : scope === 'total' ? 'alerts.scope.total' : 'alerts.scope.month';
+      return t(key, null) || String(scope || '');
     }
 
     function formatClock(timestamp) {
@@ -457,9 +555,14 @@ window.__ModuleLoader__.load({
       const cfg = config || {};
       const budget = cfg.budget || {};
       const pricing = cfg.pricing || {};
+      const thresholds = parseThresholds(budget.alertThresholds);
       return {
+        includeSubagents: cfg.includeSubagents !== false,
         budgetAmount: String(num(budget.amount, 0)),
         budgetPeriod: budget.period === 'total' ? 'total' : 'month',
+        dailyAmount: String(num(budget.dailyAmount, 0)),
+        alertThresholds: thresholds.length > 0 ? thresholds.join(', ') : '80, 100',
+        webhookUrl: typeof budget.webhookUrl === 'string' ? budget.webhookUrl : '',
         pricingMode: pricing.mode === 'custom' ? 'custom' : 'official',
         inputPerM: String(num(pricing.inputPerM, 2)),
         outputPerM: String(num(pricing.outputPerM, 8)),
@@ -473,10 +576,19 @@ window.__ModuleLoader__.load({
     function patchFromForm(form) {
       const source = form || {};
       const days = num(source.timelineDays, 14);
+      const thresholds = parseThresholds(source.alertThresholds);
       return {
+        includeSubagents: source.includeSubagents !== false,
         budget: {
           amount: Math.max(0, num(source.budgetAmount, 0)),
           period: source.budgetPeriod === 'total' ? 'total' : 'month',
+          dailyAmount: Math.max(0, num(source.dailyAmount, 0)),
+          alertThresholds: thresholds.length > 0 ? thresholds : [80, 100],
+          webhookUrl: String(
+            source.webhookUrl === undefined || source.webhookUrl === null ? '' : source.webhookUrl,
+          )
+            .trim()
+            .slice(0, 500),
         },
         pricing: {
           mode: source.pricingMode === 'custom' ? 'custom' : 'official',
@@ -486,7 +598,7 @@ window.__ModuleLoader__.load({
           cacheWritePerM: Math.max(0, num(source.cacheWritePerM, 2)),
         },
         tokensPerBowl: Math.max(1, Math.round(num(source.tokensPerBowl, 8000))),
-        timelineDays: [7, 14, 30].indexOf(days) >= 0 ? days : 14,
+        timelineDays: [7, 14, 30, 90].indexOf(days) >= 0 ? days : 14,
       };
     }
 
@@ -1861,6 +1973,130 @@ window.__ModuleLoader__.load({
         100% { transform: scale(1); }
       }
 
+      /* ---------- P1: export / budget alerts / breakdown / subagent badge ---------- */
+      .wgs-icon-btn--text {
+        width: auto;
+        min-width: 31px;
+        padding: 0 10px;
+        gap: 6px;
+        border-radius: 999px;
+        font-size: 11.5px;
+        line-height: 1;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .wgs-export-label { display: inline; }
+      .wgs-alert-banner {
+        border-color: rgba(255, 130, 150, 0.62);
+        background:
+          radial-gradient(420px 120px at 0% 0%, rgba(255, 130, 150, 0.22), transparent 70%),
+          rgba(255, 130, 150, 0.12);
+        box-shadow: 0 0 0 1px rgba(255, 130, 150, 0.18), 0 10px 26px rgba(255, 80, 110, 0.14);
+      }
+      .wgs-alert-banner .wgs-banner-title { color: #ffc2ce; font-size: 12.5px; }
+      .wgs-alert-banner[data-kind="alert"] .wgs-banner-sub { color: #f0c3cd; }
+      .wgs-alert-threshold {
+        margin-left: auto;
+        padding: 1px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 130, 150, 0.5);
+        background: rgba(255, 130, 150, 0.16);
+        color: #ffd7df;
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .wgs-alert-count { color: #ff9bab; font-size: 10px; font-weight: 800; }
+      .wgs-kpi[data-alert="true"] {
+        border-color: rgba(255, 130, 150, 0.55);
+        box-shadow: inset 0 0 0 1px rgba(255, 130, 150, 0.22), 0 0 26px rgba(255, 80, 110, 0.12);
+      }
+      .wgs-kpi[data-alert="true"] .wgs-kpi-value { color: #ff9bab; }
+      .wgs-kpi[data-alert="true"] .wgs-kpi-label { color: #ffb3c1; }
+
+      .wgs-breakdown-body { padding: 0 15px 14px; }
+      .wgs-breakdown .wgs-empty { margin: 0; }
+      .wgs-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; }
+      .wgs-tab {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(143, 208, 255, 0.2);
+        background: rgba(79, 158, 232, 0.08);
+        color: #9db4d4;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+        transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+      }
+      .wgs-tab:hover { background: rgba(143, 208, 255, 0.16); color: #cfe6ff; }
+      .wgs-tab:focus-visible { outline: 2px solid #8fd0ff; outline-offset: 2px; }
+      .wgs-tab[data-active="true"] {
+        border-color: rgba(233, 194, 122, 0.55);
+        background: rgba(233, 194, 122, 0.14);
+        color: #ffe6b3;
+        font-weight: 700;
+      }
+      .wgs-breakdown-list { display: flex; flex-direction: column; gap: 9px; }
+      .wgs-breakdown-row { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .wgs-breakdown-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; min-width: 0; }
+      .wgs-breakdown-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: #eaf4ff;
+      }
+      .wgs-breakdown-cost { flex: none; font-size: 11px; font-weight: 700; color: #ffe6b3; white-space: nowrap; }
+      .wgs-breakdown-cost em { font-style: normal; margin-left: 5px; font-size: 10px; font-weight: 500; color: #8fa7c8; }
+      .wgs-breakdown-bar { height: 7px; border-radius: 99px; background: rgba(143, 208, 255, 0.12); overflow: hidden; }
+      .wgs-breakdown-bar i {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        min-width: 2px;
+        background: linear-gradient(90deg, #4f9ee8, #8fd0ff);
+        box-shadow: 0 0 8px rgba(143, 208, 255, 0.4);
+        transition: width 560ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .wgs-breakdown-bar i[data-kind="workspace"] {
+        background: linear-gradient(90deg, #3f8f6f, #7fe7d6);
+        box-shadow: 0 0 8px rgba(127, 231, 214, 0.35);
+      }
+      .wgs-breakdown-bar i[data-kind="agentType"] {
+        background: linear-gradient(90deg, #b06a9a, #ffb7cf);
+        box-shadow: 0 0 8px rgba(255, 183, 207, 0.35);
+      }
+      .wgs-breakdown-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10px; color: #8fa7c8; }
+      .wgs-breakdown-meta span { white-space: nowrap; }
+      .wgs-subagent-badge {
+        flex: none;
+        padding: 0 6px;
+        border-radius: 999px;
+        border: 1px solid rgba(233, 194, 122, 0.5);
+        background: rgba(233, 194, 122, 0.14);
+        color: #ffe6b3;
+        font-size: 9px;
+        font-weight: 700;
+        line-height: 16px;
+        letter-spacing: 0.02em;
+      }
+      .wgs-session-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+      .wgs-session-line .wgs-session-name { flex: 1 1 auto; min-width: 0; }
+      .wgs-field-hint { font-size: 9.5px; line-height: 1.45; color: #7c93b4; margin: 2px 0 2px; }
+      .wgs-check {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: #e3eefc;
+        cursor: pointer;
+        margin-bottom: 4px;
+      }
+      .wgs-check input { margin: 2px 0 0; accent-color: #e9c27a; flex: none; }
+      .wgs-skel-breakdown { height: 190px; border-radius: 16px; }
+
       /* ---------- responsive ---------- */
       @media (max-width: 900px) {
         .wgs-hero { grid-template-columns: minmax(0, 1fr); padding: 8px 12px 12px; }
@@ -1902,9 +2138,12 @@ window.__ModuleLoader__.load({
         .wgs-tooltip { min-width: 106px; font-size: 10px; }
         .wgs-chart .wgs-axis { font-size: 14px; }
         .wgs-skel-kpis { grid-template-columns: minmax(0, 1fr); }
-        .wgs-skel-chart, .wgs-skel-cpu, .wgs-skel-table { height: 180px; }
+        .wgs-skel-chart, .wgs-skel-cpu, .wgs-skel-table, .wgs-skel-breakdown { height: 180px; }
         .wgs-drawer-panel { width: 100%; }
         .wgs-grid2 { grid-template-columns: minmax(0, 1fr); }
+        .wgs-export-label { display: none; }
+        .wgs-icon-btn--text { width: 31px; min-width: 31px; padding: 0; border-radius: 50%; }
+        .wgs-breakdown-body { padding: 0 11px 12px; }
       }
       @media (max-width: 430px) {
         .wgs-kpis { grid-template-columns: minmax(0, 1fr); }
@@ -1916,6 +2155,9 @@ window.__ModuleLoader__.load({
         .wgs-bowl-number { font-size: 31px; }
         .wgs-head-actions { gap: 3px; }
         .wgs-icon-btn { width: 28px; height: 28px; }
+        .wgs-icon-btn--text { width: 28px; min-width: 28px; }
+        .wgs-alert-banner .wgs-banner-title { font-size: 11.5px; flex-wrap: wrap; }
+        .wgs-alert-threshold { margin-left: 0; }
         .wgs-thead { --wgs-cols: minmax(0, 1.5fr) 78px 48px 40px; }
         .wgs-tbody { --wgs-cols: minmax(0, 1.5fr) 78px 48px 40px; }
         .wgs-col-updated { display: none; }
@@ -2069,6 +2311,39 @@ window.__ModuleLoader__.load({
             strokeWidth: 1.5,
             strokeLinecap: 'round',
           }),
+        );
+      }
+      if (kind === 'download') {
+        return h(
+          'svg',
+          root,
+          h('path', {
+            d: 'M12 3.8v9.6M8.2 10l3.8 3.8 3.8-3.8',
+            stroke: 'currentColor',
+            strokeWidth: 1.7,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+          }),
+          h('path', {
+            d: 'M4.6 16.2v2.4c0 .8.6 1.4 1.4 1.4h12c.8 0 1.4-.6 1.4-1.4v-2.4',
+            stroke: 'currentColor',
+            strokeWidth: 1.6,
+            strokeLinecap: 'round',
+          }),
+        );
+      }
+      if (kind === 'alert') {
+        return h(
+          'svg',
+          root,
+          h('path', {
+            d: 'M12 3.6l8.4 14.6H3.6z',
+            stroke: 'currentColor',
+            strokeWidth: 1.7,
+            strokeLinejoin: 'round',
+          }),
+          h('path', { d: 'M12 9.2v4.4', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round' }),
+          h('circle', { cx: 12, cy: 16, r: 1, fill: 'currentColor' }),
         );
       }
       return h('svg', root, h('circle', { cx: 12, cy: 12, r: 7, stroke: 'currentColor', strokeWidth: 1.6 }));
@@ -2367,7 +2642,11 @@ window.__ModuleLoader__.load({
     function KpiCard(props) {
       return h(
         'div',
-        { className: 'wgs-kpi', 'data-accent': props.accent || 'sea' },
+        {
+          className: 'wgs-kpi',
+          'data-accent': props.accent || 'sea',
+          'data-alert': props.alert ? 'true' : 'false',
+        },
         h(
           'div',
           { className: 'wgs-kpi-head' },
@@ -2404,6 +2683,9 @@ window.__ModuleLoader__.load({
       const today = data.today || {};
       const budget = data.budget || {};
       const config = data.config || {};
+      const pricingMode = config.pricing && config.pricing.mode === 'custom' ? 'custom' : 'official';
+      const alerts = Array.isArray(budget.alerts) ? budget.alerts : [];
+      const alerted = alerts.length > 0;
       const amount = Math.max(0, num(budget.amount, num(config.budget && config.budget.amount, 0)));
       const cost = num(totals.cost, 0);
       const spent = num(budget.spent, cost);
@@ -2412,6 +2694,21 @@ window.__ModuleLoader__.load({
       const barPercent = clamp(rawPercent, 0, 100);
       const over = amount > 0 && spent > amount;
       const hasBudget = amount > 0;
+      const daily = budget.daily || {};
+      const dailyEnabled = daily.enabled !== false && num(daily.amount, 0) > 0;
+      const dailyText = dailyEnabled
+        ? t('kpi.budgetDaily', null, {
+            spent: formatAmount(daily.spent),
+            amount: formatAmount(daily.amount),
+            pct: formatPercent(daily.percent),
+          })
+        : '';
+      const budgetSub = hasBudget
+        ? (over
+            ? t('kpi.budgetOver', null, { pct: Math.round(rawPercent) })
+            : t('kpi.budgetSpent', null, { pct: Math.round(rawPercent) })) +
+          (dailyText ? ' · ' + dailyText : '')
+        : dailyText || t('kpi.todayCost', null, { cost: formatAmount(today.cost) });
       return h(
         'div',
         { className: 'wgs-kpis' },
@@ -2450,13 +2747,10 @@ window.__ModuleLoader__.load({
                 amount: formatAmount(amount),
               })
             : t('kpi.budgetNone'),
-          sub: hasBudget
-            ? over
-              ? t('kpi.budgetOver', null, { pct: Math.round(rawPercent) })
-              : t('kpi.budgetSpent', null, { pct: Math.round(rawPercent) })
-            : t('kpi.todayCost', null, { cost: formatAmount(today.cost) }),
+          sub: budgetSub,
           money: true,
-          over: over,
+          over: over || alerted,
+          alert: alerted,
           bar: hasBudget ? barPercent : undefined,
           valueStyle: hasBudget ? { fontSize: '16px' } : { fontSize: '18px', color: '#b9cde8' },
           accent: 'gold',
@@ -2713,6 +3007,149 @@ window.__ModuleLoader__.load({
     }
 
     /* ============================================================
+     * 成本归因（模型 / 工作区 / 主体）
+     * ============================================================ */
+
+    function breakdownList(breakdown, tab) {
+      const source = breakdown || {};
+      const list =
+        tab === 'workspace' ? source.byWorkspace : tab === 'agentType' ? source.byAgentType : source.byModel;
+      return Array.isArray(list) ? list.filter((item) => item && typeof item === 'object') : [];
+    }
+
+    function BreakdownCard(props) {
+      const t = props.t;
+      const breakdown = props.breakdown || {};
+      const [tab, setTab] = useState('model');
+      const items = breakdownList(breakdown, tab)
+        .slice()
+        .sort((left, right) => num(right.cost, 0) - num(left.cost, 0));
+      let totalCost = 0;
+      let maxCost = 0;
+      let maxTokens = 0;
+      for (const item of items) {
+        const itemCost = num(item.cost, 0);
+        totalCost += itemCost;
+        maxCost = Math.max(maxCost, itemCost);
+        maxTokens = Math.max(maxTokens, num(item.tokens, 0));
+      }
+      const costRatioMode = maxCost > 0;
+      const ratioOf = (item) => {
+        if (costRatioMode) return num(item.cost, 0) / maxCost;
+        return maxTokens > 0 ? num(item.tokens, 0) / maxTokens : 0;
+      };
+      const visible = items.slice(0, 8);
+      const hiddenCount = items.length - visible.length;
+
+      const tabs = h(
+        'div',
+        { className: 'wgs-tabs', role: 'tablist', 'aria-label': t('breakdown.title') },
+        [
+          ['model', t('breakdown.tab.model')],
+          ['workspace', t('breakdown.tab.workspace')],
+          ['agentType', t('breakdown.tab.agentType')],
+        ].map((entry) =>
+          h(
+            'button',
+            {
+              key: entry[0],
+              type: 'button',
+              role: 'tab',
+              className: 'wgs-tab',
+              'data-active': tab === entry[0] ? 'true' : 'false',
+              'aria-selected': tab === entry[0] ? 'true' : 'false',
+              onClick: () => setTab(entry[0]),
+            },
+            entry[1],
+          ),
+        ),
+      );
+
+      const head = h(
+        'div',
+        { className: 'wgs-section-head' },
+        h(
+          'div',
+          null,
+          h('h3', { className: 'wgs-section-title' }, t('breakdown.title')),
+          h('div', { className: 'wgs-section-sub' }, t('breakdown.sub')),
+        ),
+        h('div', { className: 'wgs-section-sub' }, formatShortMoney(totalCost)),
+      );
+
+      const rows = visible.map((item, index) => {
+        const itemCost = num(item.cost, 0);
+        const share = costRatioMode
+          ? (itemCost / Math.max(0.000000001, totalCost)) * 100
+          : maxTokens > 0
+            ? (num(item.tokens, 0) / maxTokens) * 100
+            : 0;
+        const label =
+          tab === 'agentType' && item.key === 'main'
+            ? t('breakdown.agent.main')
+            : tab === 'agentType' && item.key === 'subagent'
+              ? t('breakdown.agent.subagent')
+              : item.label || item.key || t('common.na');
+        const hint = tab === 'workspace' ? item.key || '' : item.key && item.key !== label ? item.key : '';
+        return h(
+          'div',
+          { className: 'wgs-breakdown-row', key: tab + ':' + (item.key || index) },
+          h(
+            'div',
+            { className: 'wgs-breakdown-top' },
+            h(
+              'span',
+              {
+                className: 'wgs-breakdown-label',
+                title: tab === 'workspace' ? item.key || label : hint || label,
+              },
+              label,
+            ),
+            h(
+              'span',
+              { className: 'wgs-breakdown-cost' },
+              formatShortMoney(itemCost),
+              costRatioMode ? h('em', null, formatPercent(share) + '%') : null,
+            ),
+          ),
+          h(
+            'div',
+            { className: 'wgs-breakdown-bar' },
+            h('i', {
+              style: { width: clamp(ratioOf(item) * 100, 0, 100).toFixed(1) + '%' },
+              'data-kind': tab,
+            }),
+          ),
+          h(
+            'div',
+            { className: 'wgs-breakdown-meta' },
+            h('span', null, t('breakdown.tokens', null, { tokens: formatTokens(item.tokens) })),
+            h('span', null, t('breakdown.requests', null, { n: formatInt(item.requests) })),
+            h('span', null, t('breakdown.sessions', null, { n: formatInt(item.sessions) })),
+          ),
+        );
+      });
+
+      return h(
+        'section',
+        { className: 'wgs-card wgs-breakdown' },
+        head,
+        h(
+          'div',
+          { className: 'wgs-breakdown-body' },
+          tabs,
+          items.length === 0
+            ? h('div', { className: 'wgs-empty' }, t('breakdown.empty'))
+            : h('div', { className: 'wgs-breakdown-list' }, rows),
+          !costRatioMode && items.length > 0 ? h('div', { className: 'wgs-chart-note' }, t('breakdown.unpriced')) : null,
+          hiddenCount > 0
+            ? h('div', { className: 'wgs-chart-note' }, t('breakdown.more', null, { n: formatInt(hiddenCount) }))
+            : null,
+        ),
+      );
+    }
+
+    /* ============================================================
      * CPU 监控
      * ============================================================ */
 
@@ -2957,7 +3394,21 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'wgs-cell' },
-                h('span', { className: 'wgs-session-name', title: title }, title),
+                h(
+                  'span',
+                  { className: 'wgs-session-line' },
+                  h('span', { className: 'wgs-session-name', title: title }, title),
+                  session.isSubagent
+                    ? h(
+                        'span',
+                        {
+                          className: 'wgs-subagent-badge',
+                          title: session.parentTitle || '',
+                        },
+                        t('sessions.subagentBadge'),
+                      )
+                    : null,
+                ),
                 h('span', { className: 'wgs-session-id' }, '#' + shortId),
               ),
               h('div', { className: 'wgs-cell wgs-col-updated' }, formatSessionTime(session.updatedAt, t('sessions.today'))),
@@ -3049,6 +3500,14 @@ window.__ModuleLoader__.load({
                       h('div', { className: 'wgs-detail-label' }, t('sessions.detail.model')),
                       h('div', { className: 'wgs-detail-value' }, session.model || t('common.na')),
                     ),
+                    session.parentTitle
+                      ? h(
+                          'div',
+                          { className: 'wgs-detail-item', style: { gridColumn: '1 / -1' } },
+                          h('div', { className: 'wgs-detail-label' }, t('sessions.detail.parent')),
+                          h('div', { className: 'wgs-detail-value' }, session.parentTitle),
+                        )
+                      : null,
                     h(
                       'div',
                       { className: 'wgs-detail-item', style: { gridColumn: '1 / -1' } },
@@ -3225,6 +3684,23 @@ window.__ModuleLoader__.load({
                   h(
                     'div',
                     { className: 'wgs-form-group' },
+                    h('div', { className: 'wgs-form-group-title' }, t('settings.scope')),
+                    h(
+                      'label',
+                      { className: 'wgs-check' },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: form.includeSubagents !== false,
+                        disabled: !editable,
+                        onChange: (event) => update('includeSubagents', event.target.checked),
+                      }),
+                      h('span', null, t('settings.includeSubagents')),
+                    ),
+                    h('div', { className: 'wgs-field-hint' }, t('settings.includeSubagentsHint')),
+                  ),
+                  h(
+                    'div',
+                    { className: 'wgs-form-group' },
                     h('div', { className: 'wgs-form-group-title' }, t('settings.budget')),
                     h(
                       'div',
@@ -3257,6 +3733,47 @@ window.__ModuleLoader__.load({
                           h('option', { value: 'total' }, t('settings.period.total')),
                         ),
                       ),
+                    ),
+                    h(
+                      'div',
+                      { className: 'wgs-grid2' },
+                      h(
+                        Field,
+                        { label: t('settings.dailyAmount') },
+                        h('input', {
+                          className: 'wgs-input',
+                          type: 'number',
+                          min: 0,
+                          step: 1,
+                          value: form.dailyAmount,
+                          disabled: !editable,
+                          onChange: (event) => update('dailyAmount', event.target.value),
+                        }),
+                      ),
+                      h(
+                        Field,
+                        { label: t('settings.alertThresholds'), hint: t('settings.alertThresholdsHint') },
+                        h('input', {
+                          className: 'wgs-input',
+                          type: 'text',
+                          value: form.alertThresholds,
+                          placeholder: '80, 100',
+                          disabled: !editable,
+                          onChange: (event) => update('alertThresholds', event.target.value),
+                        }),
+                      ),
+                    ),
+                    h(
+                      Field,
+                      { label: t('settings.webhookUrl'), hint: t('settings.webhookHint') },
+                      h('input', {
+                        className: 'wgs-input',
+                        type: 'url',
+                        value: form.webhookUrl,
+                        placeholder: 'https://…',
+                        disabled: !editable,
+                        onChange: (event) => update('webhookUrl', event.target.value),
+                      }),
                     ),
                   ),
         h(
@@ -3370,6 +3887,7 @@ window.__ModuleLoader__.load({
                           h('option', { value: '7' }, t('settings.days7')),
                           h('option', { value: '14' }, t('settings.days14')),
                           h('option', { value: '30' }, t('settings.days30')),
+                          h('option', { value: '90' }, t('settings.days90')),
                         ),
                       ),
                     ),
@@ -3417,6 +3935,7 @@ window.__ModuleLoader__.load({
         null,
         h('div', { className: 'wgs-skel-kpis' }, cards),
         h('div', { className: 'wgs-skel wgs-skel-chart' }),
+        h('div', { className: 'wgs-skel wgs-skel-breakdown' }),
         h('div', { className: 'wgs-skel wgs-skel-cpu' }),
         h('div', { className: 'wgs-skel wgs-skel-table' }),
       );
@@ -3882,6 +4401,79 @@ window.__ModuleLoader__.load({
         }
       }, [applySnapshot, refreshing]);
 
+      const refreshRef = useRef(null);
+
+      useEffect(() => {
+        refreshRef.current = refresh;
+      }, [refresh]);
+
+      /* SSE：usage 事件 1s 节流触发刷新；失败静默，保留 3s 轮询兜底 */
+      useEffect(() => {
+        if (!open) return undefined;
+        if (typeof window.EventSource !== 'function') return undefined;
+        let source = null;
+        let closed = false;
+        let pending = 0;
+        let lastRunAt = 0;
+        let errors = 0;
+        const requestRefresh = () => {
+          if (closed || pending) return;
+          const wait = Math.max(0, 1000 - (Date.now() - lastRunAt));
+          pending = window.setTimeout(() => {
+            pending = 0;
+            lastRunAt = Date.now();
+            if (!closed && refreshRef.current) refreshRef.current();
+          }, wait);
+        };
+        try {
+          source = new window.EventSource(API + '/events');
+        } catch (error) {
+          source = null;
+        }
+        if (!source) return undefined;
+        source.onopen = () => {
+          errors = 0;
+        };
+        source.onmessage = (message) => {
+          if (closed || !message || !message.data) return;
+          let event = null;
+          try {
+            event = JSON.parse(message.data);
+          } catch (error) {
+            return;
+          }
+          if (!event || event.type !== 'usage') return;
+          requestRefresh();
+        };
+        source.onerror = () => {
+          if (closed) return;
+          errors += 1;
+          if (!source) return;
+          if (source.readyState === 2 || errors >= 4) {
+            try {
+              source.close();
+            } catch (error) {
+              /* The stream is already gone; polling keeps the panel fresh. */
+            }
+            source = null;
+          }
+        };
+        return () => {
+          closed = true;
+          if (pending) window.clearTimeout(pending);
+          if (source) {
+            source.onmessage = null;
+            source.onerror = null;
+            source.onopen = null;
+            try {
+              source.close();
+            } catch (error) {
+              /* Already closed. */
+            }
+          }
+        };
+      }, [open]);
+
       const onSettingsSaved = useCallback(() => {
         window.setTimeout(() => {
           if (mountedRef.current) refresh();
@@ -3905,14 +4497,11 @@ window.__ModuleLoader__.load({
       if (!open) return null;
 
       const data = overview;
-      const pricingMode =
-        data && data.config && data.config.pricing && data.config.pricing.mode === 'custom'
-          ? 'custom'
-          : 'official';
       const character = data && data.character ? data.character : {};
       const sessions = data && Array.isArray(data.sessions) ? data.sessions : [];
       const timeline = data && data.timeline ? data.timeline : null;
       const cpu = data && data.cpu ? data.cpu : null;
+      const breakdown = data && data.breakdown ? data.breakdown : null;
       const hostState = character.state;
       const eatingActive = eating;
       const speed = speedFromRate(data);
@@ -3927,6 +4516,49 @@ window.__ModuleLoader__.load({
             : t('header.offline');
 
       const banners = [];
+      const budgetAlerts = data && data.budget && Array.isArray(data.budget.alerts) ? data.budget.alerts.slice() : [];
+      budgetAlerts.sort((left, right) => num(right.threshold, 0) - num(left.threshold, 0));
+      if (budgetAlerts.length > 0) {
+        const topAlert = budgetAlerts[0] || {};
+        banners.push(
+          h(
+            'div',
+            { className: 'wgs-banner wgs-alert-banner', 'data-kind': 'alert', key: 'banner-alert' },
+            h(
+              'div',
+              { className: 'wgs-banner-title' },
+              h(Icon, { kind: 'alert', size: 14 }),
+              h('span', null, t('alerts.title')),
+              h(
+                'span',
+                { className: 'wgs-alert-threshold' },
+                t('alerts.threshold', null, { pct: formatPercent(topAlert.threshold) }),
+              ),
+              budgetAlerts.length > 1
+                ? h('span', { className: 'wgs-alert-count' }, '×' + formatInt(budgetAlerts.length))
+                : null,
+            ),
+            h(
+              'div',
+              { className: 'wgs-banner-sub' },
+              t('alerts.line', null, {
+                scope: scopeLabel(t, topAlert.scope),
+                percent: formatPercent(topAlert.percent),
+                spent: formatAmount(topAlert.spent),
+                amount: formatAmount(topAlert.amount),
+                period: topAlert.periodLabel || t('common.na'),
+              }),
+            ),
+            budgetAlerts.length > 1
+              ? h(
+                  'div',
+                  { className: 'wgs-banner-sub' },
+                  t('alerts.more', null, { n: formatInt(budgetAlerts.length - 1) }),
+                )
+              : null,
+          ),
+        );
+      }
       if (status === 'offline') {
         banners.push(
           h(
@@ -4037,6 +4669,18 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'wgs-head-actions' },
               h(
+                'a',
+                {
+                  className: 'wgs-icon-btn wgs-icon-btn--text',
+                  href: API + '/export.csv',
+                  download: 'whale-girl-stats.csv',
+                  title: t('header.exportHint'),
+                  'aria-label': t('header.exportHint'),
+                },
+                h(Icon, { kind: 'download', size: 14 }),
+                h('span', { className: 'wgs-export-label' }, t('header.export')),
+              ),
+              h(
                 'button',
                 {
                   className: 'wgs-icon-btn',
@@ -4099,6 +4743,7 @@ window.__ModuleLoader__.load({
                   null,
                   h(KpiGrid, { t: t, data: data }),
                   h(TimelineCard, { t: t, timeline: timeline }),
+                  h(BreakdownCard, { t: t, breakdown: breakdown }),
                   h(CpuCard, { t: t, cpu: cpu, history: cpuHistory }),
                   h(SessionsCard, {
                     t: t,
