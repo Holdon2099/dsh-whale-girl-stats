@@ -29,6 +29,9 @@ window.__ModuleLoader__.load({
       'header.connecting': '连接中…',
       'header.offline': '连接断开，重试中',
       'header.updated': '更新于 {time}',
+      'header.balance': '余额',
+      'header.balanceHint': 'DeepSeek 账户余额（充值 + 赠送）',
+      'header.balanceBonus': '含赠送 ¥{bonus}',
       'header.refresh': '刷新数据',
       'header.refreshing': '刷新中…',
       'header.settings': '统计设置',
@@ -167,6 +170,8 @@ window.__ModuleLoader__.load({
       'alerts.scope.daily': '日预算',
       'alerts.line': '{scope} 已用 {percent}%：已花 ¥{spent} / 预算 ¥{amount}（{period}）',
       'alerts.more': '另有 {n} 条阈值告警已触发',
+      'alerts.notificationTitle': '干饭账本预算告警',
+      'alerts.notificationBody': '{scope} 已用 {percent}%：已花 ¥{spent} / 预算 ¥{amount}',
       'breakdown.title': '成本归因',
       'breakdown.sub': '按成本占比看清 token 花在哪里',
       'breakdown.tab.model': '模型',
@@ -190,6 +195,8 @@ window.__ModuleLoader__.load({
       'settings.alertThresholdsHint': '例如 80,100；Host 在首次越过阈值时触发，可配合 Webhook。',
       'settings.webhookUrl': 'Webhook URL（可选）',
       'settings.webhookHint': '阈值首次触发时 Host 会向该地址 POST 一条 JSON。',
+      'settings.notify': '浏览器系统通知',
+      'settings.notifyHint': '预算阈值触发时显示系统通知；首次勾选会请求通知权限。',
       'settings.days90': '90 天',
       'kpi.budgetDaily': '日预算 ¥{spent} / ¥{amount}（{pct}%）',
       'common.close': '关闭',
@@ -209,6 +216,9 @@ window.__ModuleLoader__.load({
       'header.connecting': 'connecting…',
       'header.offline': 'disconnected, retrying',
       'header.updated': 'updated {time}',
+      'header.balance': 'balance',
+      'header.balanceHint': 'DeepSeek account balance (top-up + bonus)',
+      'header.balanceBonus': 'incl. bonus ¥{bonus}',
       'header.refresh': 'Refresh data',
       'header.refreshing': 'Refreshing…',
       'header.settings': 'Statistics settings',
@@ -347,6 +357,8 @@ window.__ModuleLoader__.load({
       'alerts.scope.daily': 'Daily budget',
       'alerts.line': '{scope} at {percent}%: ¥{spent} spent / ¥{amount} budget ({period})',
       'alerts.more': '{n} more threshold alerts fired',
+      'alerts.notificationTitle': 'Rice ledger budget alert',
+      'alerts.notificationBody': '{scope} is at {percent}%: ¥{spent} spent of ¥{amount}',
       'breakdown.title': 'Cost attribution',
       'breakdown.sub': 'Where the tokens went, by cost share',
       'breakdown.tab.model': 'Model',
@@ -370,6 +382,8 @@ window.__ModuleLoader__.load({
       'settings.alertThresholdsHint': 'e.g. 80,100; the host fires once per threshold crossing (Webhook optional).',
       'settings.webhookUrl': 'Webhook URL (optional)',
       'settings.webhookHint': 'The host POSTs JSON here when a threshold first triggers.',
+      'settings.notify': 'Browser system notifications',
+      'settings.notifyHint': 'Show a system notification when a budget threshold triggers; the first check asks for permission.',
       'settings.days90': '90 days',
       'kpi.budgetDaily': 'daily ¥{spent} / ¥{amount} ({pct}%)',
       'common.close': 'Close',
@@ -563,6 +577,7 @@ window.__ModuleLoader__.load({
         dailyAmount: String(num(budget.dailyAmount, 0)),
         alertThresholds: thresholds.length > 0 ? thresholds.join(', ') : '80, 100',
         webhookUrl: typeof budget.webhookUrl === 'string' ? budget.webhookUrl : '',
+        budgetNotify: budget.notify === true,
         pricingMode: pricing.mode === 'custom' ? 'custom' : 'official',
         inputPerM: String(num(pricing.inputPerM, 2)),
         outputPerM: String(num(pricing.outputPerM, 8)),
@@ -589,6 +604,7 @@ window.__ModuleLoader__.load({
           )
             .trim()
             .slice(0, 500),
+          notify: source.budgetNotify === true,
         },
         pricing: {
           mode: source.pricingMode === 'custom' ? 'custom' : 'official',
@@ -1034,6 +1050,26 @@ window.__ModuleLoader__.load({
       .wgs-dot[data-state="loading"] { background: #e9c27a; box-shadow: 0 0 8px rgba(233, 194, 122, 0.7); }
       .wgs-head-sep { color: rgba(157, 180, 212, 0.45); }
       .wgs-head-actions { display: flex; align-items: center; gap: 5px; flex: none; }
+      .wgs-balance-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        height: 26px;
+        padding: 0 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(233, 194, 122, 0.3);
+        background: rgba(233, 194, 122, 0.08);
+        color: #e9c27a;
+        font-size: 11px;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+      .wgs-balance-chip strong {
+        color: #ffe6b3;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .wgs-balance-label { color: #b7c9e4; font-size: 10px; }
       .wgs-icon-btn {
         width: 31px;
         height: 31px;
@@ -2154,6 +2190,7 @@ window.__ModuleLoader__.load({
         .wgs-bubble { max-width: 132px; font-size: 10.5px; }
         .wgs-bowl-number { font-size: 31px; }
         .wgs-head-actions { gap: 3px; }
+        .wgs-balance-chip { display: none; }
         .wgs-icon-btn { width: 28px; height: 28px; }
         .wgs-icon-btn--text { width: 28px; min-width: 28px; }
         .wgs-alert-banner .wgs-banner-title { font-size: 11.5px; flex-wrap: wrap; }
@@ -3775,6 +3812,27 @@ window.__ModuleLoader__.load({
                         onChange: (event) => update('webhookUrl', event.target.value),
                       }),
                     ),
+                    h(Check, {
+                      checked: form.budgetNotify,
+                      label: t('settings.notify'),
+                      onChange: (event) => {
+                        const checked = event.target.checked;
+                        update('budgetNotify', checked);
+                        if (
+                          checked &&
+                          typeof window !== 'undefined' &&
+                          window.Notification &&
+                          window.Notification.permission === 'default'
+                        ) {
+                          try {
+                            window.Notification.requestPermission().catch(() => {});
+                          } catch (error) {
+                            /* Permission is optional. */
+                          }
+                        }
+                      },
+                    }),
+                    h('div', { className: 'wgs-note' }, t('settings.notifyHint')),
                   ),
         h(
           'div',
@@ -4210,6 +4268,7 @@ window.__ModuleLoader__.load({
       const lastGrowthRef = useRef(0);
       const overviewRef = useRef(null);
       const settingsOpenRef = useRef(false);
+      const notifiedAlertsRef = useRef(new Set());
 
       const [overview, setOverview] = useState(null);
       const [status, setStatus] = useState('loading');
@@ -4385,6 +4444,32 @@ window.__ModuleLoader__.load({
         };
       }, [open]);
 
+      useEffect(() => {
+        if (!overview || !overview.config || !overview.config.budget || overview.config.budget.notify !== true) return;
+        if (typeof window === 'undefined' || !window.Notification || window.Notification.permission !== 'granted') return;
+        const alerts = overview.budget && Array.isArray(overview.budget.alerts) ? overview.budget.alerts : [];
+        for (const alert of alerts) {
+          const key = `${alert.scope}:${alert.periodLabel}:${alert.threshold}`;
+          if (notifiedAlertsRef.current.has(key)) continue;
+          notifiedAlertsRef.current.add(key);
+          if (notifiedAlertsRef.current.size > 200) {
+            notifiedAlertsRef.current = new Set([...notifiedAlertsRef.current].slice(-50));
+          }
+          try {
+            new window.Notification(t('alerts.notificationTitle'), {
+              body: t('alerts.notificationBody', null, {
+                scope: scopeLabel(t, alert.scope),
+                percent: formatPercent(alert.percent),
+                spent: formatAmount(alert.spent),
+                amount: formatAmount(alert.amount),
+              }),
+            });
+          } catch (error) {
+            /* Notification is best effort. */
+          }
+        }
+      }, [overview, t]);
+
       const refresh = useCallback(async () => {
         if (refreshing) return;
         setRefreshing(true);
@@ -4502,6 +4587,22 @@ window.__ModuleLoader__.load({
       const timeline = data && data.timeline ? data.timeline : null;
       const cpu = data && data.cpu ? data.cpu : null;
       const breakdown = data && data.breakdown ? data.breakdown : null;
+      const balance = data && data.balance && data.balance.status === 'ready' ? data.balance : null;
+      const balanceWallet =
+        balance && Array.isArray(balance.wallets)
+          ? balance.wallets.find((wallet) => wallet.currency === 'CNY') || balance.wallets[0] || null
+          : null;
+      const bonusWallet =
+        balance && balanceWallet && Array.isArray(balance.bonusWallets)
+          ? balance.bonusWallets.find((wallet) => wallet.currency === balanceWallet.currency) || null
+          : null;
+      const balanceTitle =
+        balanceWallet && balanceWallet.balance !== undefined
+          ? t('header.balanceHint') +
+            (bonusWallet && num(bonusWallet.balance, 0) > 0
+              ? ' · ' + t('header.balanceBonus', null, { bonus: formatAmount(bonusWallet.balance) })
+              : '')
+          : '';
       const hostState = character.state;
       const eatingActive = eating;
       const speed = speedFromRate(data);
@@ -4668,6 +4769,14 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'wgs-head-actions' },
+              balanceWallet
+                ? h(
+                    'div',
+                    { className: 'wgs-balance-chip', title: balanceTitle },
+                    h('span', { className: 'wgs-balance-label' }, t('header.balance')),
+                    h('strong', null, formatShortMoney(balanceWallet.balance)),
+                  )
+                : null,
               h(
                 'a',
                 {
