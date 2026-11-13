@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const API = '/api/whale-girl-stats';
 const CURRENCY = 'CNY';
 const RATE_WINDOW_MS = 60 * 1000;
@@ -40,7 +40,14 @@ const CHINA_HOLIDAYS_2026 = new Set([
 
 const DEFAULT_CONFIG = {
   enabled: true,
-  budget: { amount: 50, period: 'month' },
+  includeSubagents: true,
+  budget: {
+    amount: 50,
+    period: 'month',
+    dailyAmount: 0,
+    alertThresholds: [80, 100],
+    webhookUrl: '',
+  },
   pricing: {
     mode: 'official',
     inputPerM: 2,
@@ -92,15 +99,37 @@ function officialRates(model, time) {
   return { ...(peak ? table.peak : table.offPeak), peak };
 }
 
+function normalizeThresholds(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value == null ? '' : value).split(/[\s,，]+/).filter(Boolean);
+  const thresholds = [...new Set(source
+    .map((item) => Math.round(Number.parseFloat(String(item))))
+    .filter((item) => Number.isFinite(item) && item >= 1 && item <= 100))]
+    .sort((a, b) => a - b);
+  return thresholds.length > 0 ? thresholds : [...DEFAULT_CONFIG.budget.alertThresholds];
+}
+
+function workspaceLabel(cwd) {
+  const path = String(cwd || '').replace(/[\\/]+$/, '');
+  if (!path) return '未知工作区';
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
 function mergeConfig(raw) {
   const input = isRecord(raw) ? raw : {};
   const budget = isRecord(input.budget) ? input.budget : {};
   const pricing = isRecord(input.pricing) ? input.pricing : {};
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : DEFAULT_CONFIG.enabled,
+    includeSubagents: typeof input.includeSubagents === 'boolean' ? input.includeSubagents : DEFAULT_CONFIG.includeSubagents,
     budget: {
       amount: number(budget.amount, DEFAULT_CONFIG.budget.amount, 0, 1e9),
       period: budget.period === 'total' ? 'total' : 'month',
+      dailyAmount: number(budget.dailyAmount, DEFAULT_CONFIG.budget.dailyAmount, 0, 1e9),
+      alertThresholds: normalizeThresholds(budget.alertThresholds),
+      webhookUrl: typeof budget.webhookUrl === 'string' ? budget.webhookUrl.trim().slice(0, 500) : '',
     },
     pricing: {
       mode: pricing.mode === 'custom' ? 'custom' : 'official',
@@ -110,7 +139,7 @@ function mergeConfig(raw) {
       cacheWritePerM: number(pricing.cacheWritePerM, DEFAULT_CONFIG.pricing.cacheWritePerM, 0, 1e6),
     },
     tokensPerBowl: integer(input.tokensPerBowl, DEFAULT_CONFIG.tokensPerBowl, 100, 1e9),
-    timelineDays: integer(input.timelineDays, DEFAULT_CONFIG.timelineDays, 3, 90),
+    timelineDays: integer(input.timelineDays, DEFAULT_CONFIG.timelineDays, 3, 365),
   };
 }
 
@@ -128,6 +157,22 @@ function cleanConfigPatch(raw, current) {
       next.budget.period = input.budget.period;
       changed.budget = true;
     }
+    if (input.budget.dailyAmount !== undefined) {
+      next.budget.dailyAmount = number(input.budget.dailyAmount, next.budget.dailyAmount, 0, 1e9);
+      changed.budget = true;
+    }
+    if (input.budget.alertThresholds !== undefined) {
+      next.budget.alertThresholds = normalizeThresholds(input.budget.alertThresholds);
+      changed.budget = true;
+    }
+    if (typeof input.budget.webhookUrl === 'string') {
+      next.budget.webhookUrl = input.budget.webhookUrl.trim().slice(0, 500);
+      changed.budget = true;
+    }
+  }
+  if (input.includeSubagents !== undefined) {
+    next.includeSubagents = input.includeSubagents !== false;
+    changed.includeSubagents = true;
   }
   if (isRecord(input.pricing)) {
     if (input.pricing.mode === 'official' || input.pricing.mode === 'custom') {
@@ -146,7 +191,7 @@ function cleanConfigPatch(raw, current) {
     changed.tokensPerBowl = true;
   }
   if (input.timelineDays !== undefined) {
-    next.timelineDays = integer(input.timelineDays, next.timelineDays, 3, 90);
+    next.timelineDays = integer(input.timelineDays, next.timelineDays, 3, 365);
     changed.timelineDays = true;
   }
   if (input.enabled !== undefined) {
@@ -347,6 +392,8 @@ function parseSession(header, events, live, inheritedFloor = 0) {
   }
 
   const model = [...models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+  const parentSession = header && header.parentSession ? String(header.parentSession) : null;
+  const isSubagent = Boolean(parentSession) || Boolean(header && header.origin === 'subagent') || Number(header && header.delegationDepth) > 0;
   return {
     id,
     shortId: id.replace(/^session-/, '').slice(0, 8),
@@ -356,6 +403,9 @@ function parseSession(header, events, live, inheritedFloor = 0) {
     userMessages,
     turns: Math.max(turns, userMessages > 0 ? 1 : 0),
     model,
+    models: [...models.keys()],
+    isSubagent,
+    parentSession,
     live: Boolean(live),
     cwd: typeof (header && header.cwd) === 'string' ? header.cwd : '',
     points,
@@ -391,6 +441,8 @@ export function apply(ctx, rawConfig) {
     sessions: new Map(),
     snapshot: null,
     refreshing: null,
+    sseClients: new Set(),
+    alertFired: new Set(),
     cpuPrev: null,
     cpuHistory: [],
     cpuSample: null,
@@ -401,6 +453,51 @@ export function apply(ctx, rawConfig) {
 
   const log = (...values) => console.info('[whale-girl-stats]', ...values);
   const warn = (...values) => console.warn('[whale-girl-stats]', ...values);
+
+  function broadcastSse(payload) {
+    if (state.disposed) return;
+    const data = `data: ${JSON.stringify({ ...payload, at: Date.now() })}\n\n`;
+    for (const res of state.sseClients) {
+      try {
+        res.write(data);
+      } catch {
+        state.sseClients.delete(res);
+      }
+    }
+  }
+
+  function fireBudgetAlert(scope, periodLabel, threshold, percent, spent, amount) {
+    const key = `${scope}:${periodLabel}:${threshold}`;
+    if (state.alertFired.has(key)) return;
+    state.alertFired.add(key);
+    if (state.alertFired.size > 500) {
+      const keep = [...state.alertFired].slice(-200);
+      state.alertFired = new Set(keep);
+    }
+    const url = state.config.budget.webhookUrl;
+    if (!url) return;
+    const payload = {
+      type: 'whale-girl-stats/budget-alert',
+      scope,
+      periodLabel,
+      threshold,
+      percent: Math.round(percent * 10) / 10,
+      spent: Math.round(spent * 10000) / 10000,
+      amount,
+      currency: CURRENCY,
+      at: new Date().toISOString(),
+    };
+    Promise.resolve()
+      .then(() =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(5000),
+        }),
+      )
+      .catch((error) => warn('预算 Webhook 推送失败', error && error.message));
+  }
 
   // --- CPU sampler -------------------------------------------------------
   function sampleCpu() {
@@ -586,212 +683,309 @@ export function apply(ctx, rawConfig) {
   }
 
   function buildSnapshot(collection) {
-    const pricing = state.config.pricing;
-    const sessions = [];
-    const allPoints = [];
-    const aggregate = emptyUsage();
-    let liveSessions = 0;
-    let firstAt = 0;
-    let lastAt = 0;
-    const now = Date.now();
+      const pricing = state.config.pricing;
+      const allEntries = collection.sessions || [];
+      const titleById = new Map(allEntries.map((entry) => [entry.id, entry.title]));
+      const included = allEntries.filter((entry) => state.config.includeSubagents || !entry.isSubagent);
+      const sessions = [];
+      const allPoints = [];
+      const aggregate = emptyUsage();
+      const modelStats = new Map();
+      const workspaceStats = new Map();
+      const agentStats = new Map();
+      let liveSessions = 0;
+      let subagentSessions = 0;
+      let firstAt = 0;
+      let lastAt = 0;
+      const now = Date.now();
 
-    for (const entry of collection.sessions) {
-      const points = entry.points || [];
-      const totals = usageFromPoints(points, pricing);
-      entry.totals = totals;
-      for (const point of points) allPoints.push(point);
-      const active = Boolean(entry.live) && entry.updatedAt > 0 && now - entry.updatedAt < 15 * 60 * 1000;
-      if (active) liveSessions += 1;
-      const include = totals.requests > 0 || (entry.live && entry.userMessages > 0);
-      if (include) {
-        sessions.push({
-          id: entry.id,
-          shortId: entry.shortId,
-          title: entry.title,
-          createdAt: entry.createdAt,
-          updatedAt: entry.updatedAt,
-          inputTokens: totals.inputTokens,
-          outputTokens: totals.outputTokens,
-          cacheReadTokens: totals.cacheReadTokens,
-          cacheWriteTokens: totals.cacheWriteTokens,
-          totalTokens: totals.totalTokens,
-          cost: totals.cost,
-          requests: totals.requests,
-          unpricedRequests: totals.unpricedRequests,
-          turns: entry.turns,
-          model: entry.model,
-          live: entry.live,
-          active,
-          cwd: entry.cwd,
-        });
-        addUsage(aggregate, totals);
-        if (!firstAt || entry.createdAt < firstAt) firstAt = entry.createdAt;
-        if (entry.updatedAt > lastAt) lastAt = entry.updatedAt;
-      }
-    }
-
-    sessions.sort((a, b) => b.updatedAt - a.updatedAt);
-
-    const todayKey = dayKey(now);
-    const currentMonth = monthKey(now);
-    const today = emptyUsage();
-    const monthSpend = { cost: 0 };
-    const recentTokens = { sum: 0 };
-
-    for (const point of allPoints) {
-      if (dayKey(point.time) === todayKey) {
-        today.inputTokens += point.inputTokens;
-        today.outputTokens += point.outputTokens;
-        today.cacheReadTokens += point.cacheReadTokens;
-        today.cacheWriteTokens += point.cacheWriteTokens;
-        today.totalTokens += point.totalTokens;
-        today.requests += 1;
-        today.cost += point.cost;
-        if (!point.priced) today.unpricedRequests += 1;
-      }
-      if (monthKey(point.time) === currentMonth) monthSpend.cost += point.cost;
-      if (point.time >= now - RATE_WINDOW_MS) recentTokens.sum += point.totalTokens;
-    }
-
-    const days = state.config.timelineDays;
-    const buckets = [];
-    const bucketMap = new Map();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    for (let offset = days - 1; offset >= 0; offset -= 1) {
-      const date = new Date(todayStart);
-      date.setDate(date.getDate() - offset);
-      const key = dayKey(date.getTime());
-      const bucket = {
-        date: key,
-        label: timeLabel(date.getTime()),
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        totalTokens: 0,
-        cost: 0,
-        requests: 0,
+      const rowFor = (map, key, label) => {
+        let row = map.get(key);
+        if (!row) {
+          row = { key, label, tokens: 0, cost: 0, requests: 0, sessions: new Set() };
+          map.set(key, row);
+        }
+        return row;
       };
-      buckets.push(bucket);
-      bucketMap.set(key, bucket);
+
+      for (const entry of included) {
+        const points = entry.points || [];
+        const totals = usageFromPoints(points, pricing);
+        entry.totals = totals;
+        for (const point of points) allPoints.push(point);
+        const active = Boolean(entry.live) && entry.updatedAt > 0 && now - entry.updatedAt < 15 * 60 * 1000;
+        if (active) liveSessions += 1;
+        if (entry.isSubagent) subagentSessions += 1;
+
+        for (const point of points) {
+          const model = point.model || '未标注';
+          const row = rowFor(modelStats, model, model);
+          row.tokens += point.totalTokens;
+          row.cost += point.cost;
+          row.requests += 1;
+          row.sessions.add(entry.id);
+        }
+        const workspaceKey = entry.cwd || '';
+        const workspace = rowFor(workspaceStats, workspaceKey, workspaceLabel(workspaceKey));
+        workspace.tokens += totals.totalTokens;
+        workspace.cost += totals.cost;
+        workspace.requests += totals.requests;
+        workspace.sessions.add(entry.id);
+        const agentKey = entry.isSubagent ? 'subagent' : 'main';
+        const agent = rowFor(agentStats, agentKey, agentKey);
+        agent.tokens += totals.totalTokens;
+        agent.cost += totals.cost;
+        agent.requests += totals.requests;
+        agent.sessions.add(entry.id);
+
+        const include = totals.requests > 0 || (entry.live && entry.userMessages > 0);
+        if (include) {
+          sessions.push({
+            id: entry.id,
+            shortId: entry.shortId,
+            title: entry.title,
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+            inputTokens: totals.inputTokens,
+            outputTokens: totals.outputTokens,
+            cacheReadTokens: totals.cacheReadTokens,
+            cacheWriteTokens: totals.cacheWriteTokens,
+            totalTokens: totals.totalTokens,
+            cost: totals.cost,
+            requests: totals.requests,
+            unpricedRequests: totals.unpricedRequests,
+            turns: entry.turns,
+            model: entry.model,
+            models: entry.models || (entry.model ? [entry.model] : []),
+            isSubagent: Boolean(entry.isSubagent),
+            parentSession: entry.parentSession || null,
+            parentTitle: entry.parentSession ? titleById.get(entry.parentSession) || null : null,
+            live: entry.live,
+            active,
+            cwd: entry.cwd,
+          });
+          addUsage(aggregate, totals);
+          if (!firstAt || entry.createdAt < firstAt) firstAt = entry.createdAt;
+          if (entry.updatedAt > lastAt) lastAt = entry.updatedAt;
+        }
+      }
+
+      sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+
+      const finalizeBreakdown = (map) =>
+        [...map.values()]
+          .map((row) => ({
+            key: row.key,
+            label: row.label,
+            tokens: row.tokens,
+            cost: Math.round(row.cost * 10000) / 10000,
+            requests: row.requests,
+            sessions: row.sessions.size,
+          }))
+          .filter((row) => row.tokens > 0 || row.cost > 0 || row.requests > 0)
+          .sort((a, b) => b.cost - a.cost || b.tokens - a.tokens);
+
+      const breakdown = {
+        byModel: finalizeBreakdown(modelStats),
+        byWorkspace: finalizeBreakdown(workspaceStats),
+        byAgentType: finalizeBreakdown(agentStats),
+      };
+
+      const todayKey = dayKey(now);
+      const currentMonth = monthKey(now);
+      const today = emptyUsage();
+      const monthSpend = { cost: 0 };
+      const recentTokens = { sum: 0 };
+
+      for (const point of allPoints) {
+        if (dayKey(point.time) === todayKey) {
+          today.inputTokens += point.inputTokens;
+          today.outputTokens += point.outputTokens;
+          today.cacheReadTokens += point.cacheReadTokens;
+          today.cacheWriteTokens += point.cacheWriteTokens;
+          today.totalTokens += point.totalTokens;
+          today.requests += 1;
+          today.cost += point.cost;
+          if (!point.priced) today.unpricedRequests += 1;
+        }
+        if (monthKey(point.time) === currentMonth) monthSpend.cost += point.cost;
+        if (point.time >= now - RATE_WINDOW_MS) recentTokens.sum += point.totalTokens;
+      }
+
+      const days = state.config.timelineDays;
+      const buckets = [];
+      const bucketMap = new Map();
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      for (let offset = days - 1; offset >= 0; offset -= 1) {
+        const date = new Date(todayStart);
+        date.setDate(date.getDate() - offset);
+        const key = dayKey(date.getTime());
+        const bucket = {
+          date: key,
+          label: timeLabel(date.getTime()),
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          requests: 0,
+        };
+        buckets.push(bucket);
+        bucketMap.set(key, bucket);
+      }
+      for (const point of allPoints) {
+        const bucket = bucketMap.get(dayKey(point.time));
+        if (!bucket) continue;
+        bucket.inputTokens += point.inputTokens;
+        bucket.outputTokens += point.outputTokens;
+        bucket.cacheReadTokens += point.cacheReadTokens;
+        bucket.totalTokens += point.totalTokens;
+        bucket.cost += point.cost;
+        bucket.requests += 1;
+      }
+      let maxTokens = 0;
+      let maxCost = 0;
+      for (const bucket of buckets) {
+        if (bucket.totalTokens > maxTokens) maxTokens = bucket.totalTokens;
+        if (bucket.cost > maxCost) maxCost = bucket.cost;
+      }
+
+      const totalTokens = aggregate.totalTokens;
+      const tokensPerBowl = state.config.tokensPerBowl;
+      const bowls = totalTokens / tokensPerBowl;
+      const happiness = Math.min(0.995, Math.max(0.2, 0.25 + 0.25 * Math.log10(1 + totalTokens / 1000)));
+      const tokensPerMin = recentTokens.sum;
+      const streaming = now - state.activityAt < 15000;
+      const active = tokensPerMin > 0 || streaming;
+      const charState = tokensPerMin > 30000 || state.streaming ? 'feast' : active ? 'eating' : 'idle';
+
+      const budgetConfig = state.config.budget;
+      const budgetAmount = budgetConfig.amount;
+      const spent = budgetConfig.period === 'month' ? monthSpend.cost : aggregate.cost;
+      const periodLabel = budgetConfig.period === 'month' ? currentMonth : '累计';
+      const alerts = [];
+      const collectAlerts = (scope, label, amount, spentValue) => {
+        if (!(amount > 0)) return;
+        const percent = (spentValue / amount) * 100;
+        for (const threshold of budgetConfig.alertThresholds) {
+          if (percent + 1e-9 < threshold) continue;
+          alerts.push({
+            scope,
+            threshold,
+            percent: Math.round(percent * 10) / 10,
+            spent: Math.round(spentValue * 10000) / 10000,
+            amount,
+            periodLabel: label,
+          });
+          fireBudgetAlert(scope, label, threshold, percent, spentValue, amount);
+        }
+      };
+      collectAlerts(budgetConfig.period, periodLabel, budgetAmount, spent);
+      const dailyAmount = budgetConfig.dailyAmount;
+      const dailySpent = today.cost;
+      collectAlerts('daily', todayKey, dailyAmount, dailySpent);
+      alerts.sort((a, b) => b.threshold - a.threshold || b.percent - a.percent);
+      const budget = {
+        enabled: budgetAmount > 0,
+        amount: budgetAmount,
+        spent: Math.round(spent * 10000) / 10000,
+        remaining: Math.round((budgetAmount - spent) * 10000) / 10000,
+        percent: budgetAmount > 0 ? Math.round((spent / budgetAmount) * 1000) / 10 : 0,
+        period: budgetConfig.period,
+        periodLabel,
+        currency: CURRENCY,
+        daily: {
+          enabled: dailyAmount > 0,
+          amount: dailyAmount,
+          spent: Math.round(dailySpent * 10000) / 10000,
+          remaining: Math.round((dailyAmount - dailySpent) * 10000) / 10000,
+          percent: dailyAmount > 0 ? Math.round((dailySpent / dailyAmount) * 1000) / 10 : 0,
+          periodLabel: todayKey,
+        },
+        alerts,
+      };
+
+      const cpu = state.cpuSample || sampleCpu();
+      const pricingInfo = {
+        mode: pricing.mode,
+        version: PRICE_VERSION,
+        currency: CURRENCY,
+        peakNow: isPeakTime(now),
+        peakSchedule: 'Asia/Shanghai · Mon-Fri 09:00-12:00 / 14:00-18:00; off-peak weekends and Chinese public holidays',
+        models: Object.fromEntries(
+          Object.entries(DEEPSEEK_PRICING).map(([model, value]) => [model, {
+            peak: value.peak,
+            offPeak: value.offPeak,
+          }]),
+        ),
+      };
+
+      return {
+        ok: true,
+        generatedAt: now,
+        version: VERSION,
+        available: collection.available,
+        currency: CURRENCY,
+        config: state.config,
+        pricingInfo,
+        totals: {
+          inputTokens: aggregate.inputTokens,
+          outputTokens: aggregate.outputTokens,
+          cacheReadTokens: aggregate.cacheReadTokens,
+          cacheWriteTokens: aggregate.cacheWriteTokens,
+          totalTokens: aggregate.totalTokens,
+          cost: Math.round(aggregate.cost * 10000) / 10000,
+          unpricedRequests: aggregate.unpricedRequests,
+          sessions: sessions.length,
+          liveSessions,
+          subagentSessions,
+          requests: aggregate.requests,
+          turns: sessions.reduce((sum, session) => sum + session.turns, 0),
+          firstAt: firstAt || 0,
+          lastAt: lastAt || 0,
+        },
+        today: {
+          inputTokens: today.inputTokens,
+          outputTokens: today.outputTokens,
+          cacheReadTokens: today.cacheReadTokens,
+          totalTokens: today.totalTokens,
+          cost: Math.round(today.cost * 10000) / 10000,
+          requests: today.requests,
+          unpricedRequests: today.unpricedRequests,
+        },
+        budget,
+        breakdown,
+        rate: {
+          windowSec: RATE_WINDOW_MS / 1000,
+          tokensLastMin: tokensPerMin,
+          tokensPerMin,
+          active,
+          appetite: clamp(tokensPerMin / 30000, 0, 1),
+        },
+        character: {
+          name: '汐',
+          bowls: Math.round(bowls * 10) / 10,
+          bowlFraction: Math.round((bowls - Math.floor(bowls)) * 1000) / 1000,
+          tokensPerBowl,
+          happiness: Math.round(happiness * 1000) / 1000,
+          state: charState,
+        },
+        timeline: {
+          days,
+          from: buckets.length > 0 ? buckets[0].date : todayKey,
+          to: todayKey,
+          buckets,
+          maxTokens,
+          maxCost: Math.round(maxCost * 10000) / 10000,
+        },
+        sessions,
+        cpu: {
+          ...cpu,
+          history: state.cpuHistory.slice(-40),
+        },
+      };
     }
-    for (const point of allPoints) {
-      const bucket = bucketMap.get(dayKey(point.time));
-      if (!bucket) continue;
-      bucket.inputTokens += point.inputTokens;
-      bucket.outputTokens += point.outputTokens;
-      bucket.cacheReadTokens += point.cacheReadTokens;
-      bucket.totalTokens += point.totalTokens;
-      bucket.cost += point.cost;
-      bucket.requests += 1;
-    }
-    let maxTokens = 0;
-    let maxCost = 0;
-    for (const bucket of buckets) {
-      if (bucket.totalTokens > maxTokens) maxTokens = bucket.totalTokens;
-      if (bucket.cost > maxCost) maxCost = bucket.cost;
-    }
-
-    const totalTokens = aggregate.totalTokens;
-    const tokensPerBowl = state.config.tokensPerBowl;
-    const bowls = totalTokens / tokensPerBowl;
-    const happiness = Math.min(0.995, Math.max(0.2, 0.25 + 0.25 * Math.log10(1 + totalTokens / 1000)));
-    const tokensPerMin = recentTokens.sum;
-    const streaming = now - state.activityAt < 15000;
-    const active = tokensPerMin > 0 || streaming;
-    const charState = tokensPerMin > 30000 || state.streaming ? 'feast' : active ? 'eating' : 'idle';
-
-    const budgetAmount = state.config.budget.amount;
-    const spent = state.config.budget.period === 'month' ? monthSpend.cost : aggregate.cost;
-    const budget = {
-      enabled: budgetAmount > 0,
-      amount: budgetAmount,
-      spent: Math.round(spent * 10000) / 10000,
-      remaining: Math.round((budgetAmount - spent) * 10000) / 10000,
-      percent: budgetAmount > 0 ? Math.round((spent / budgetAmount) * 1000) / 10 : 0,
-      period: state.config.budget.period,
-      periodLabel: state.config.budget.period === 'month' ? currentMonth : '累计',
-      currency: CURRENCY,
-    };
-
-    const cpu = state.cpuSample || sampleCpu();
-    const pricingInfo = {
-      mode: pricing.mode,
-      version: PRICE_VERSION,
-      currency: CURRENCY,
-      peakNow: isPeakTime(now),
-      peakSchedule: 'Asia/Shanghai · Mon-Fri 09:00-12:00 / 14:00-18:00; off-peak weekends and Chinese public holidays',
-      models: Object.fromEntries(
-        Object.entries(DEEPSEEK_PRICING).map(([model, value]) => [model, {
-          peak: value.peak,
-          offPeak: value.offPeak,
-        }]),
-      ),
-    };
-
-    return {
-      ok: true,
-      generatedAt: now,
-      version: VERSION,
-      available: collection.available,
-      currency: CURRENCY,
-      config: state.config,
-      pricingInfo,
-      totals: {
-        inputTokens: aggregate.inputTokens,
-        outputTokens: aggregate.outputTokens,
-        cacheReadTokens: aggregate.cacheReadTokens,
-        cacheWriteTokens: aggregate.cacheWriteTokens,
-        totalTokens: aggregate.totalTokens,
-        cost: Math.round(aggregate.cost * 10000) / 10000,
-        unpricedRequests: aggregate.unpricedRequests,
-        sessions: sessions.length,
-        liveSessions,
-        requests: aggregate.requests,
-        turns: sessions.reduce((sum, session) => sum + session.turns, 0),
-        firstAt: firstAt || 0,
-        lastAt: lastAt || 0,
-      },
-      today: {
-        inputTokens: today.inputTokens,
-        outputTokens: today.outputTokens,
-        cacheReadTokens: today.cacheReadTokens,
-        totalTokens: today.totalTokens,
-        cost: Math.round(today.cost * 10000) / 10000,
-        requests: today.requests,
-        unpricedRequests: today.unpricedRequests,
-      },
-      budget,
-      rate: {
-        windowSec: RATE_WINDOW_MS / 1000,
-        tokensLastMin: tokensPerMin,
-        tokensPerMin,
-        active,
-        appetite: clamp(tokensPerMin / 30000, 0, 1),
-      },
-      character: {
-        name: '汐',
-        bowls: Math.round(bowls * 10) / 10,
-        bowlFraction: Math.round((bowls - Math.floor(bowls)) * 1000) / 1000,
-        tokensPerBowl,
-        happiness: Math.round(happiness * 1000) / 1000,
-        state: charState,
-      },
-      timeline: {
-        days,
-        from: buckets.length > 0 ? buckets[0].date : todayKey,
-        to: todayKey,
-        buckets,
-        maxTokens,
-        maxCost: Math.round(maxCost * 10000) / 10000,
-      },
-      sessions,
-      cpu: {
-        ...cpu,
-        history: state.cpuHistory.slice(-40),
-      },
-    };
-  }
 
   async function refresh(force = false) {
     if (state.refreshing) return state.refreshing;
@@ -826,6 +1020,71 @@ export function apply(ctx, rawConfig) {
           message: String((error && error.message) || error),
         }),
       );
+  }
+
+  function handleSse(req, res) {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    res.write('retry: 3000\n\n');
+    res.write(`data: ${JSON.stringify({ type: 'hello', version: VERSION, at: Date.now() })}\n\n`);
+    state.sseClients.add(res);
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        clearInterval(heartbeat);
+        state.sseClients.delete(res);
+      }
+    }, 20000);
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      state.sseClients.delete(res);
+    };
+    req.on('close', cleanup);
+    req.on('error', cleanup);
+  }
+
+  function handleExport(res) {
+    refresh()
+      .then((snapshot) => {
+        const csvCell = (value) => `"${String(value == null ? '' : value).replace(/"/g, '""')}"`;
+        const rows = [
+          ['session_id', 'title', 'kind', 'parent_title', 'workspace', 'models', 'requests', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'total_tokens', 'cost_cny', 'created_at', 'updated_at'],
+        ];
+        for (const session of snapshot.sessions || []) {
+          rows.push([
+            session.id,
+            session.title,
+            session.isSubagent ? 'subagent' : 'main',
+            session.parentTitle || '',
+            session.cwd,
+            (session.models || [session.model]).join(' / '),
+            session.requests,
+            session.inputTokens,
+            session.outputTokens,
+            session.cacheReadTokens,
+            session.totalTokens,
+            session.cost,
+            new Date(session.createdAt).toISOString(),
+            new Date(session.updatedAt).toISOString(),
+          ]);
+        }
+        const data = Buffer.from(`\ufeff${rows.map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`, 'utf8');
+        res.writeHead(200, {
+          'content-type': 'text/csv; charset=utf-8',
+          'content-disposition': 'attachment; filename="whale-girl-stats-sessions.csv"',
+          'content-length': data.length,
+        });
+        res.end(data);
+      })
+      .catch((error) => {
+        warn('导出失败', error && error.message);
+        textResponse(res, 500, 'Export failed');
+      });
   }
 
   function handleConfigGet(res) {
@@ -868,6 +1127,7 @@ export function apply(ctx, rawConfig) {
             ...base,
             budget: { ...base.budget, ...next.budget },
             pricing: { ...base.pricing, ...next.pricing },
+            includeSubagents: next.includeSubagents,
             tokensPerBowl: next.tokensPerBowl,
             timelineDays: next.timelineDays,
             enabled: next.enabled,
@@ -909,6 +1169,14 @@ export function apply(ctx, rawConfig) {
       if (req.method !== 'GET') return textResponse(res, 405, 'Method not allowed');
       handleOverview(res);
     });
+    register(`${API}/events`, (req, res) => {
+      if (req.method !== 'GET') return textResponse(res, 405, 'Method not allowed');
+      handleSse(req, res);
+    });
+    register(`${API}/export.csv`, (req, res) => {
+      if (req.method !== 'GET') return textResponse(res, 405, 'Method not allowed');
+      handleExport(res);
+    });
     register(`${API}/config`, async (req, res) => {
       if (req.method === 'GET') return handleConfigGet(res);
       if (req.method !== 'POST') return textResponse(res, 405, 'Method not allowed');
@@ -937,6 +1205,9 @@ export function apply(ctx, rawConfig) {
         ) {
           state.activityAt = Date.now();
           state.streaming = type === 'assistant/attempt' || type === 'step/start' || type === 'tool/call';
+          if (type === 'assistant/message' || type === 'turn/end') {
+            broadcastSse({ type: 'usage', sessionId: session && session.id ? String(session.id) : '' });
+          }
         }
       }),
     );
@@ -955,6 +1226,14 @@ export function apply(ctx, rawConfig) {
     return () => {
       state.disposed = true;
       state.sessions.clear();
+      for (const res of state.sseClients) {
+        try {
+          res.end();
+        } catch {
+          /* already closed */
+        }
+      }
+      state.sseClients.clear();
       for (const dispose of disposers) {
         try {
           dispose();
