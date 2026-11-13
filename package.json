@@ -1,6 +1,6 @@
-﻿{
+{
   "name": "@local/whale-girl-stats",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Real session token statistics with cost budget, timeline, per-session usage, CPU monitoring and a whale-girl who eats rice from a basin whenever tokens are spent.",
@@ -39,4 +39,5 @@
     }
   }
 }
+
 
