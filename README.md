@@ -20,12 +20,15 @@ DSH Web GUI 的**真实会话数据统计插件**。它读取本机 DSH Session 
 - **真实数据**：通过 Host 的 `sessionQuery` 服务读取本机全部会话（含当前活动会话），不读假数据、不依赖浏览器缓存。
 - **总览 KPI**：总 Token（输入 / 输出 / 缓存读取分项）、真实会话数、进行中会话数、请求数。
 - **成本估算**：按 DeepSeek 官方峰谷价与每条消息的模型自动计价（flash / v4-pro、cache hit/miss、输出、缓存写入按未命中输入价），也可切换为自定义单价；未知模型不虚构价格。
-- **预算**：支持「本月」或「累计」预算，显示已花、剩余、进度条；超支变红。
-- **Token 时间线**：最近 7/14/30 天逐日堆叠柱状图（输入 / 输出 / 缓存读取）+ 成本折线，hover 查看当天明细。
-- **逐会话明细**：标题、更新时间、Token 分项、成本、请求数、模型、进行中 / 已归档；可排序、可展开。
+- **预算与告警**：支持「本月 / 累计」预算和可选日预算；80% / 100% 阈值可在面板显示醒目横幅，Host 可向 Webhook 推送一次告警（同一周期、同一阈值去重）；超支变红。
+- **成本归因**：按模型 / 工作区 / 主会话 vs 子代理拆分成本、Token、请求和会话数；可切换「包含子代理 / 仅主会话」，所有总量与预算口径随之变化。
+- **实时刷新**：创建 Session 或完成一次模型调用时通过 SSE 通知浏览器立即刷新，保留 3 秒轮询兜底。
+- **Token 时间线**：最近 7 / 14 / 30 / 90 天逐日堆叠柱状图（输入 / 输出 / 缓存读取）+ 成本折线，hover 查看当天明细。
+- **逐会话明细**：标题、更新时间、Token 分项、成本、请求数、模型、主会话 / 子代理、进行中 / 已归档；可排序、可展开；可导出 CSV。
+- **历史与导出**：逐 Session CSV 导出（含模型、工作区、主/子代理、Token 分项、成本），便于做月度报表。
 - **CPU 监控**：实时总占用、每核占用、进程 CPU、进程内存、系统内存、系统运行时长、进程运行时长、最近采样 sparkline。
 - **干饭角色**：空闲时头顶饭盆等待投喂；检测到 Token 增长立即进入干饭——咀嚼弹跳、米粒从盆里落下、蒸汽、爱心、星星、气泡轮换；饭量随累计 Token 增长，速度随消耗速率提高，永远不显示“吃饱”。
-- **设置**：面板内直接修改预算、计价模式、每碗 Token 数、时间线天数；写回插件配置并实时生效。
+- **设置**：面板内直接修改预算 / 日预算 / 告警阈值 / Webhook、计价模式、是否包含子代理、每碗 Token 数、时间线天数；写回插件配置并实时生效。
 - **本地化**：简体中文 / English。
 - **自带素材**：透明立绘、头像、插件图标；无第三方运行时依赖。
 
@@ -92,9 +95,13 @@ CPU 数据来自 Node `os` 模块与 `process.cpuUsage()`：Host 每 3 秒采样
   name: "@local/whale-girl-stats"
   config:
     enabled: true
+    includeSubagents: true       # false = 总量/预算/明细排除子代理
     budget:
       amount: 50          # 0 = 未设置预算
       period: month       # month | total
+      dailyAmount: 0      # 0 = 不启用日预算
+      alertThresholds: [80, 100]
+      webhookUrl: ''      # 可选；阈值首次触发时 POST 一次
     pricing:
       mode: official        # official = DeepSeek 官方峰谷价；custom = 自定义单价
       inputPerM: 2          # 仅 custom 模式使用：缓存未命中输入价
@@ -111,7 +118,9 @@ CPU 数据来自 Node `os` 模块与 `process.cpuUsage()`：Host 每 3 秒采样
 
 ## Host 路由
 
-- `GET  /api/whale-girl-stats/overview` —— 完整统计快照（含 CPU、时间线、会话）。
+- `GET  /api/whale-girl-stats/overview` —— 完整统计快照（含 CPU、时间线、成本归因、预算告警、会话）。
+- `GET  /api/whale-girl-stats/events` —— SSE：模型调用完成/回合结束时推送 `usage` 刷新信号。
+- `GET  /api/whale-girl-stats/export.csv` —— 逐 Session CSV 导出。
 - `GET  /api/whale-girl-stats/config` —— 当前配置。
 - `POST /api/whale-girl-stats/config` —— 修改配置（仅本机回环地址）。
 - `GET  /api/whale-girl-stats/assets/eating.webp`
@@ -145,15 +154,16 @@ whale-girl-stats/
 
 已在本机实际安装并做页面级验证（OS 截图 + UI Automation，不是只查注册表）：
 
-- Bundle `@local/whale-girl-stats@1.1.0` 安装成功，`application: applied`，插件行 `fiberPhase: active`。
-- Client slot：`sidebar.footer.action` 中 `whale-stats.footer` active；`shell.overlay` 中 `whale-stats.launcher`、`whale-stats.dashboard` 均 active。
-- **独立计价审计**：用 Python + zstandard 直接解码全部 Session 日志，与插件 API 逐 Session 对比。修复后所有 persisted Session 的 Token 完全一致；当前活动 Session 允许毫秒级尾部差异。按官方峰谷价独立重算，插件成本与独立结果差异约 **0.1%**（旧版 v1.0.0 因默认价目过期曾高估约 3.2 倍）。
-- 预算同步修正：当前数据本月应为约 **¥29.9 / ¥50（约 60%）**，不再是错误的 184.6% 超支。
-- **页面视觉实测**：左下角浮标与侧边栏 footer 均可见；Hero、KPI、14 天堆叠柱状图 + 成本折线、CPU、会话明细、可拖动状态小窗均正常渲染。
-- 设置抽屉实测可打开；新增「计价方式：官方峰谷价 / 自定义单价」；保存调用 `POST /config` 成功，Host 重载后配置保持。
-- Host 回归测试：峰/谷、周末/节假日、flash/pro、未知模型、fork 前缀过滤、live→persisted 追平，10/10 通过。
-- `node --check index.js`、`node --check client.js` 均通过。
-- 未验证：干饭动画的逐帧动效（静态截图已确认关键帧元素与状态）、窄屏布局、浅色主题并排对比。
+- Bundle `@local/whale-girl-stats@1.2.0` 安装成功，`application: applied`，插件行 active；`sidebar.footer.action` 中 `whale-stats.footer` active，`shell.overlay` 中 launcher/dashboard active。
+- **P1 实际 API 验证**：14 个会话、7 个子代理、约 684M token、成本约 ¥46.6；`budget.alerts` 在实际月预算 88% 时给出 80% 阈值告警；`breakdown.byModel/byWorkspace/byAgentType` 均有数据。
+- **成本归因 UI**：时间线下「成本归因」卡片正常；「模型 / 工作区 / 主体」三个 tab 可切换；主体 tab 实测显示「主会话 ¥26.97 57.9% / 子代理 ¥19.62 42.1%」。
+- **子代理口径**：实际 POST `includeSubagents=false` 后，会话 14→7、子代理 7→0、成本 ¥46.5→¥26.9；恢复后回到 14/7。日预算设为 ¥5 时实际触发 83.8% 告警；测试后恢复为不启用。
+- **预算告警 UI**：月预算 88.6% 时顶部红色 banner 显示阈值 80%、已花/预算/周期；预算 KPI 卡同步变红。
+- **导出**：Header「导出 CSV」按钮可见；实际请求返回 `text/csv`，含 session_id、主/子代理、workspace、models、token 分项、cost 等列。
+- **SSE**：实际连接 `/api/whale-girl-stats/events` 收到 `hello` 帧（version 1.2.0）；面板打开时 EventSource 监听 usage 事件，失败时保留 3s 轮询兜底。
+- 设置抽屉实测包含：统计范围（含子代理）、日预算、告警阈值、Webhook URL、「官方峰谷价 / 自定义单价」、时间线 7/14/30/90。
+- Host 回归测试 13/13：含子代理过滤、breakdown、日预算、alerts、CSV、继承前缀、live→persisted 追平；`node --check index.js`、`node --check client.js` 均通过。
+- 未验证：干饭动画逐帧、窄屏视觉、Webhook 实际推送（未配置地址）、浏览器原生通知（当前用应用内 banner）。
 
 ---
 
