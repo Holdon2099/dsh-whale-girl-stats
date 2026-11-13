@@ -20,6 +20,7 @@ DSH Web GUI 的**真实会话数据统计插件**。它读取本机 DSH Session 
 - **真实数据**：通过 Host 的 `sessionQuery` 服务读取本机全部会话（含当前活动会话），不读假数据、不依赖浏览器缓存。
 - **总览 KPI**：总 Token（输入 / 输出 / 缓存读取分项）、真实会话数、进行中会话数、请求数。
 - **成本估算**：按 DeepSeek 官方峰谷价与每条消息的模型自动计价（flash / v4-pro、cache hit/miss、输出、缓存写入按未命中输入价），也可切换为自定义单价；未知模型不虚构价格。
+- **余额与通知**：接入 `deepseekAccount` 显示 DeepSeek 充值与赠送余额；预算阈值可选用浏览器系统通知（首次勾选请求权限），并支持 Host Webhook。
 - **预算与告警**：支持「本月 / 累计」预算和可选日预算；80% / 100% 阈值可在面板显示醒目横幅，Host 可向 Webhook 推送一次告警（同一周期、同一阈值去重）；超支变红。
 - **成本归因**：按模型 / 工作区 / 主会话 vs 子代理拆分成本、Token、请求和会话数；可切换「包含子代理 / 仅主会话」，所有总量与预算口径随之变化。
 - **实时刷新**：创建 Session 或完成一次模型调用时通过 SSE 通知浏览器立即刷新，保留 3 秒轮询兜底。
@@ -102,6 +103,7 @@ CPU 数据来自 Node `os` 模块与 `process.cpuUsage()`：Host 每 3 秒采样
       dailyAmount: 0      # 0 = 不启用日预算
       alertThresholds: [80, 100]
       webhookUrl: ''      # 可选；阈值首次触发时 POST 一次
+      notify: false       # 浏览器系统通知（首次勾选请求权限）
     pricing:
       mode: official        # official = DeepSeek 官方峰谷价；custom = 自定义单价
       inputPerM: 2          # 仅 custom 模式使用：缓存未命中输入价
@@ -118,7 +120,7 @@ CPU 数据来自 Node `os` 模块与 `process.cpuUsage()`：Host 每 3 秒采样
 
 ## Host 路由
 
-- `GET  /api/whale-girl-stats/overview` —— 完整统计快照（含 CPU、时间线、成本归因、预算告警、会话）。
+- `GET  /api/whale-girl-stats/overview` —— 完整统计快照（含 CPU、时间线、成本归因、预算告警、账户余额、会话）。
 - `GET  /api/whale-girl-stats/events` —— SSE：模型调用完成/回合结束时推送 `usage` 刷新信号。
 - `GET  /api/whale-girl-stats/export.csv` —— 逐 Session CSV 导出。
 - `GET  /api/whale-girl-stats/config` —— 当前配置。
@@ -154,16 +156,17 @@ whale-girl-stats/
 
 已在本机实际安装并做页面级验证（OS 截图 + UI Automation，不是只查注册表）：
 
-- Bundle `@local/whale-girl-stats@1.2.0` 安装成功，`application: applied`，插件行 active；`sidebar.footer.action` 中 `whale-stats.footer` active，`shell.overlay` 中 launcher/dashboard active。
-- **P1 实际 API 验证**：14 个会话、7 个子代理、约 684M token、成本约 ¥46.6；`budget.alerts` 在实际月预算 88% 时给出 80% 阈值告警；`breakdown.byModel/byWorkspace/byAgentType` 均有数据。
+- Bundle `@local/whale-girl-stats@1.3.0` 安装成功，`application: applied`，插件行 active；`sidebar.footer.action` 中 `whale-stats.footer` active，`shell.overlay` 中 launcher/dashboard active。
+- **账户余额**：接入 `deepseekAccount.getState/getBalance`，实际页面 Header 显示「余额 ¥44.89」（CNY 钱包；USD 钱包为 0）。
+- **P1 实际 API 验证**：14 个会话、7 个子代理、约 717M token、成本约 ¥48.1；`budget.alerts` 在实际月预算 92.3% 时给出 80% 阈值告警；`breakdown.byModel/byWorkspace/byAgentType` 均有数据。
 - **成本归因 UI**：时间线下「成本归因」卡片正常；「模型 / 工作区 / 主体」三个 tab 可切换；主体 tab 实测显示「主会话 ¥26.97 57.9% / 子代理 ¥19.62 42.1%」。
 - **子代理口径**：实际 POST `includeSubagents=false` 后，会话 14→7、子代理 7→0、成本 ¥46.5→¥26.9；恢复后回到 14/7。日预算设为 ¥5 时实际触发 83.8% 告警；测试后恢复为不启用。
-- **预算告警 UI**：月预算 88.6% 时顶部红色 banner 显示阈值 80%、已花/预算/周期；预算 KPI 卡同步变红。
+- **预算告警 UI**：月预算 92.3% 时顶部红色 banner 显示阈值 80%、已花/预算/周期；预算 KPI 卡同步变红。
 - **导出**：Header「导出 CSV」按钮可见；实际请求返回 `text/csv`，含 session_id、主/子代理、workspace、models、token 分项、cost 等列。
-- **SSE**：实际连接 `/api/whale-girl-stats/events` 收到 `hello` 帧（version 1.2.0）；面板打开时 EventSource 监听 usage 事件，失败时保留 3s 轮询兜底。
-- 设置抽屉实测包含：统计范围（含子代理）、日预算、告警阈值、Webhook URL、「官方峰谷价 / 自定义单价」、时间线 7/14/30/90。
-- Host 回归测试 13/13：含子代理过滤、breakdown、日预算、alerts、CSV、继承前缀、live→persisted 追平；`node --check index.js`、`node --check client.js` 均通过。
-- 未验证：干饭动画逐帧、窄屏视觉、Webhook 实际推送（未配置地址）、浏览器原生通知（当前用应用内 banner）。
+- **SSE**：实际连接 `/api/whale-girl-stats/events` 收到 `hello` 帧（version 1.3.0）；面板打开时 EventSource 监听 usage 事件，失败时保留 3s 轮询兜底。
+- 设置抽屉包含：统计范围（含子代理）、日预算、告警阈值、Webhook URL、浏览器通知开关、「官方峰谷价 / 自定义单价」、时间线 7/14/30/90。
+- Host 回归测试 14/14：含子代理过滤、breakdown、日预算、alerts、CSV、余额、继承前缀、live→persisted 追平；`node --check index.js`、`node --check client.js` 均通过。
+- 未验证：干饭动画逐帧、窄屏视觉、Webhook 实际推送（未配置地址）、浏览器原生通知的真实弹窗（需要用户授权）、90 天大数据量视觉。
 
 ---
 
