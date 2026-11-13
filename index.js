@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const API = '/api/whale-girl-stats';
 const CURRENCY = 'CNY';
 const RATE_WINDOW_MS = 60 * 1000;
@@ -47,6 +47,7 @@ const DEFAULT_CONFIG = {
     dailyAmount: 0,
     alertThresholds: [80, 100],
     webhookUrl: '',
+    notify: false,
   },
   pricing: {
     mode: 'official',
@@ -130,6 +131,7 @@ function mergeConfig(raw) {
       dailyAmount: number(budget.dailyAmount, DEFAULT_CONFIG.budget.dailyAmount, 0, 1e9),
       alertThresholds: normalizeThresholds(budget.alertThresholds),
       webhookUrl: typeof budget.webhookUrl === 'string' ? budget.webhookUrl.trim().slice(0, 500) : '',
+      notify: budget.notify === true,
     },
     pricing: {
       mode: pricing.mode === 'custom' ? 'custom' : 'official',
@@ -167,6 +169,10 @@ function cleanConfigPatch(raw, current) {
     }
     if (typeof input.budget.webhookUrl === 'string') {
       next.budget.webhookUrl = input.budget.webhookUrl.trim().slice(0, 500);
+      changed.budget = true;
+    }
+    if (input.budget.notify !== undefined) {
+      next.budget.notify = input.budget.notify === true;
       changed.budget = true;
     }
   }
@@ -443,6 +449,7 @@ export function apply(ctx, rawConfig) {
     refreshing: null,
     sseClients: new Set(),
     alertFired: new Set(),
+    balance: { status: 'unknown', wallets: [], bonusWallets: [], updatedAt: 0 },
     cpuPrev: null,
     cpuHistory: [],
     cpuSample: null,
@@ -497,6 +504,46 @@ export function apply(ctx, rawConfig) {
         }),
       )
       .catch((error) => warn('预算 Webhook 推送失败', error && error.message));
+  }
+
+  async function refreshBalance() {
+    const account = ctx.get('deepseekAccount');
+    if (!account || typeof account.getState !== 'function' || typeof account.getBalance !== 'function') {
+      state.balance = { status: 'unavailable', wallets: [], bonusWallets: [], updatedAt: Date.now() };
+      return;
+    }
+    try {
+      const view = await account.getState();
+      if (!view || view.status !== 'credential-stored') {
+        state.balance = { status: 'signed-out', wallets: [], bonusWallets: [], updatedAt: Date.now() };
+        return;
+      }
+      const client = {
+        version: VERSION,
+        locale: 'zh-CN',
+        timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+      };
+      const result = await account.getBalance(client);
+      if (!result) {
+        state.balance = { status: 'signed-out', wallets: [], bonusWallets: [], updatedAt: Date.now() };
+        return;
+      }
+      if (result.status !== 'ready') {
+        state.balance = { status: 'failed', wallets: [], bonusWallets: [], updatedAt: Date.now() };
+        return;
+      }
+      const wallets = Array.isArray(result.value) ? result.value : [];
+      const bonusWallets = Array.isArray(result.bonusWallets) ? result.bonusWallets : [];
+      state.balance = {
+        status: 'ready',
+        wallets: wallets.map((wallet) => ({ currency: wallet.currency, balance: wallet.balance })),
+        bonusWallets: bonusWallets.map((wallet) => ({ currency: wallet.currency, balance: wallet.balance })),
+        updatedAt: Date.now(),
+      };
+    } catch (error) {
+      warn('读取账户余额失败', error && error.message);
+      state.balance = { status: 'failed', wallets: [], bonusWallets: [], updatedAt: Date.now() };
+    }
   }
 
   // --- CPU sampler -------------------------------------------------------
@@ -927,6 +974,7 @@ export function apply(ctx, rawConfig) {
         version: VERSION,
         available: collection.available,
         currency: CURRENCY,
+        balance: state.balance,
         config: state.config,
         pricingInfo,
         totals: {
@@ -1221,6 +1269,9 @@ export function apply(ctx, rawConfig) {
         }
       }, 3000),
     );
+
+    disposers.push(ctx.interval(() => { void refreshBalance(); }, 60000));
+    void refreshBalance();
 
     log(`已加载 v${VERSION}`);
     return () => {
