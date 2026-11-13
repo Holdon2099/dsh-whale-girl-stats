@@ -3,9 +3,13 @@
       name: '@local/whale-girl-stats'
       config:
         enabled: true
+        includeSubagents: true
         budget:
           amount: 50
           period: month
+          dailyAmount: 0
+          alertThresholds: [80, 100]
+          webhookUrl: ''
         pricing:
           mode: official
           inputPerM: 2
